@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-plugins/agentmemory",
+  "name": "dsh-agentmemory",
   "version": "0.4.0",
   "description": "DSH ↔ agentmemory session-memory bridge (backend-only). Mirrors session lifecycle into agentmemory with standard hookTypes (compression-friendly, dedup-safe), exposes memory_recall / memory_remember tools, and injects memory context via agent/pre-step. Configuration comes from the cordis.yml row.",
   "type": "module",

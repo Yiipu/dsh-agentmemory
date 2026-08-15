@@ -21,7 +21,7 @@
  * `shell` capability seam. Runtime daemon failures are logged and contained — they
  * never veto a session lifecycle event or fail a model step.
  *
- * Install: mount `name: "@dsh-plugins/agentmemory"` in a cordis.yml row (see
+ * Install: mount `name: "dsh-agentmemory"` in a cordis.yml row (see
  * cordis-row.example.yml). Requires Node >= 20 and a `shell` seam on the host.
  */
 import Schema from '@deepseek-ai/schemastery'

@@ -29,7 +29,7 @@ dsh plugin add --profile web /Users/opal/workspace/DSH/plugins/agentmemory   # p
 ```yaml
 - insert:
     - id: agentmemory-bridge
-      name: "@dsh-plugins/agentmemory"
+      name: "dsh-agentmemory"
       config:
         baseUrl: http://localhost:3111
         enabled: true
@@ -146,11 +146,10 @@ ln -s <harness>/node_modules/@deepseek-ai node_modules/@deepseek-ai
 | `cordis-row.example.yml` | 静态组合行示例（`name` 用可解析包名） |
 | `scripts/boot-check.mjs` | 启动/CI 就绪检查（模块 + schema + daemon + peer deps，7 项） |
 | `test/smoke.mjs` | 端到端冒烟测试 |
-| `package.json` | 可发布结构（`@dsh-plugins/agentmemory`，含 peer deps） |
+| `package.json` | 可发布结构（`dsh-agentmemory`，含 peer deps） |
 
 ## 已知边界
 
 - **记忆默认跨会话共享**（未传 `agentId`）；需要隔离时给 observe/remember 加 `agentId`。
 - `project` 解析顺序：`AGENTMEMORY_PROJECT_NAME` 环境变量 → git toplevel basename → cwd basename。
 - **未改动任何 `@deepseek-ai` 包**；未改 shipped preset 安装目录。
-

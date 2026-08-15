@@ -8,7 +8,7 @@
 #
 #   - insert:
 #       - id: agentmemory-bridge
-#         name: "@dsh-plugins/agentmemory"
+#         name: "dsh-agentmemory"
 #
 # Where to put it: the host composition cordis.yml (deployment config), or a
 # per-session agent preset under ${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/.
@@ -20,7 +20,7 @@
 # A pnpm link (file: dev checkout) works great for development.
 #
 # HMR / cache: host index.js edits take effect when the loader re-imports the
-# row — bump the name's version (e.g. @dsh-plugins/agentmemory@0.4.0) once to
+# row — bump the name's version (e.g. dsh-agentmemory@0.4.0) once to
 # bust Node's ESM cache.
 #
 # The daemon is a HARD dependency: the plugin checks livez on load and fails
@@ -35,7 +35,7 @@
 
 - insert:
     - id: agentmemory-bridge
-      name: "@dsh-plugins/agentmemory"
+      name: "dsh-agentmemory"
       config:
         baseUrl: http://localhost:3111
         secret: ""                     # Bearer token when AGENTMEMORY_SECRET is set.

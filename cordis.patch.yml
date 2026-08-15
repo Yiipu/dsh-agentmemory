@@ -3,4 +3,4 @@
 # the plugin's Config schema. See cordis-row.example.yml for the full config.
 - insert:
     - id: agentmemory-bridge
-      name: "@dsh-plugins/agentmemory"
+      name: "dsh-agentmemory"
