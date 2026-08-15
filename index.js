@@ -259,7 +259,12 @@ export async function apply(ctx, config) {
   }
 
   // One HTTP POST. Body rides on curl stdin so it never touches the command string.
-  async function post(path, payload) {
+  // An optional AbortSignal is honoured: an already-aborted call short-circuits before
+  // any I/O, and a result that completes after the signal fired is rejected as cancelled
+  // instead of surfacing a stale value. Tool `execute` bodies catch the throw and return
+  // it as `{ ok: false, error }`.
+  async function post(path, payload, signal) {
+    if (signal && signal.aborted) throw Object.assign(new Error('agentmemory request cancelled'), { code: 'ABORT_ERR' })
     const shell = getShell()
     if (!shell) throw new Error('shell service unavailable')
     const argv = ['curl', '-sS', '-m', String(cfg.curlTimeoutMs), '-X', 'POST', '-H', 'Content-Type: application/json']
@@ -271,11 +276,12 @@ export async function apply(ctx, config) {
       stdoutMaxBytes: 131072,
     }))
     if (res.exitCode !== 0) throw new Error('curl exit ' + res.exitCode + ': ' + (res.stderr ? res.stderr.text : '').slice(0, 300))
+    if (signal && signal.aborted) throw Object.assign(new Error('agentmemory request cancelled'), { code: 'ABORT_ERR' })
     return res.stdout ? res.stdout.text : ''
   }
 
-  async function postJson(path, payload) {
-    const text = await post(path, payload)
+  async function postJson(path, payload, signal) {
+    const text = await post(path, payload, signal)
     try { return JSON.parse(text) } catch { return { raw: text } }
   }
 
@@ -368,7 +374,8 @@ export async function apply(ctx, config) {
           const body = { query: str(a.query), limit: typeof a.limit === 'number' ? Math.min(Math.max(1, Math.floor(a.limit)), 50) : 8 }
           if (project) body.project = project
           if (sid) body.agentId = sid
-          const result = await postJson('/agentmemory/search', body)
+          if (!str(a.query).trim()) return { ok: false, error: 'query must be non-empty' }
+          const result = await postJson('/agentmemory/search', body, exec && exec.signal)
           return result && typeof result === 'object' ? result : { results: [], raw: result }
         } catch (err) { return { ok: false, error: err.message } }
       },
@@ -388,12 +395,14 @@ export async function apply(ctx, config) {
         try {
           const a = args && typeof args === 'object' ? args : {}
           const session = exec && exec.agent ? exec.agent.session : undefined
-          const body = { content: str(a.content) }
+          const content = str(a.content).trim()
+          if (!content) return { ok: false, error: 'content must be non-empty' }
+          const body = { content }
           if (typeof a.type === 'string' && ['pattern', 'preference', 'architecture', 'bug', 'workflow', 'fact'].includes(a.type)) body.type = a.type
           if (Array.isArray(a.concepts)) body.concepts = a.concepts.filter((c) => typeof c === 'string').slice(0, 20)
           if (typeof a.ttlDays === 'number' && a.ttlDays > 0) body.ttlDays = Math.floor(a.ttlDays)
           if (session && session.header && typeof session.header.cwd === 'string') body.project = projectOf(session.header.cwd)
-          const result = await postJson('/agentmemory/remember', body)
+          const result = await postJson('/agentmemory/remember', body, exec && exec.signal)
           return result && typeof result === 'object' ? result : { ok: false, raw: result }
         } catch (err) { return { ok: false, error: err.message } }
       },

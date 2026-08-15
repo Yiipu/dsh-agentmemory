@@ -104,6 +104,17 @@ const rememberResult = await rememberTool.execute({ content: 'DSH smoke: backend
 check('memory_remember executes', rememberResult && typeof rememberResult === 'object')
 check('memory_recall output.render returns blocks', Array.isArray(recallTool.output.render({ query: 'x' }, { results: [] })))
 
+// contract guards: non-empty inputs and exec.signal short-circuit
+const emptyRemember = await rememberTool.execute({ content: '   ' }, execCtx)
+check('memory_remember rejects empty content', emptyRemember && emptyRemember.ok === false && /non-empty/.test(emptyRemember.error || ''))
+const emptyRecall = await recallTool.execute({ query: '  ' }, execCtx)
+check('memory_recall rejects empty query', emptyRecall && emptyRecall.ok === false && /non-empty/.test(emptyRecall.error || ''))
+const aborted = new AbortController(); aborted.abort()
+const cancelledRecall = await recallTool.execute({ query: 'anything' }, { agent: { session }, signal: aborted.signal })
+check('memory_recall short-circuits on aborted exec.signal', cancelledRecall && cancelledRecall.ok === false && /cancelled/i.test(cancelledRecall.error || ''))
+const cancelledRemember = await rememberTool.execute({ content: 'should not persist', type: 'fact' }, { agent: { session }, signal: aborted.signal })
+check('memory_remember short-circuits on aborted exec.signal', cancelledRemember && cancelledRemember.ok === false && /cancelled/i.test(cancelledRemember.error || ''))
+
 // ══ 4) secret env-reference resolution ──────────────────────────────────────
 console.log('── 4) secret env resolution ──')
 function shellEnvResolve(map) {
