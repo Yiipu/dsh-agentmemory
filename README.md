@@ -1,30 +1,34 @@
 # dsh-agentmemory
 
-DSH → [agentmemory](https://github.com/rohitg00/agentmemory) 会话记忆桥接插件。
+> **dsh-agentmemory** — a [DSH](/deepseek-harness) (DeepSeek Harness) Cordis plugin that bridges a session's activity into [agentmemory](https://github.com/rohitg00/agentmemory), a local, self-hosted memory daemon.
 
-这是一个 **DSH（DeepSeek Harness）的 Cordis 插件**，订阅 DSH 的 **Session 生命周期事件**，把会话活动镜像到本地 agentmemory 守护进程（REST，默认 `http://localhost:3111`），并向模型暴露 **recall / remember 工具**，同时在 `agent/pre-step` 把记忆窗口注入模型请求。
+English | [中文](README.zh.md)
 
-所有配置来自插件在 `cordis.yml` 行里的 `config`——改配置文件就是改配置。
+The plugin subscribes to the DSH **Session lifecycle** events, mirrors session activity into the agentmemory daemon (REST, default `http://localhost:3111`), and exposes **`memory_recall` / `memory_remember`** model tools. It additionally injects a memory window into model requests once per session through the **`agent/pre-step`** waterfall.
 
-## 功能总览
+All configuration comes from the plugin's row in `cordis.yml` — editing the `config` field of that row (or the file that carries it) is how you change configuration. There is no browser UI and no persisted config file.
 
-| 能力 | 实现 |
+> **agentmemory is a hard dependency.** On load, the plugin checks `<baseUrl>/agentmemory/livez` before registering any capability (tools, listeners). If the daemon is unreachable or does not report `status: ok`, the plugin **fails to load loudly** — it does not silently degrade.
+
+## Capability overview
+
+| Capability | Implementation |
 | --- | --- |
-| 会话生命周期 → agentmemory | `session/created` → `session/start`；`session/event` → `observe`（缓冲）；`session/flush` → 落库；`session/disposed` → `session/end` |
-| 模型工具（读） | `memory_recall` → `POST /agentmemory/search`（按调用会话自动定位 sessionId/project） |
-| 模型工具（写） | `memory_remember` → `POST /agentmemory/remember`（决策/偏好/架构事实等） |
-| **记忆注入** | 经 `agent/pre-step` waterfall 注入 sourced `user/message`：①**项目 recall**（`form:'recall'`）每会话把 `/context` 项目级跨会话窗口注入一次；②**自动语义 recall**（`form:'semantic'`，可选）每条用户消息用 `/smart-search` 召回相关记忆标题注入一次；压缩前可补注入。前端渲染为独立的「上下文注入」块（`ContextMessageNode`） |
-| **配置来源** | 只读 `cordis.yml` 行的 `config`；无 UI、无文件持久化。**agentmemory 是硬依赖**：加载时校验 `livez`，不可达即加载失败（响亮失败，不静默继续） |
+| Session lifecycle → agentmemory | `session/created` → `session/start`; `session/event` → `observe` (buffered); `session/flush` → flush to disk; `session/disposed` → `session/end` |
+| Model tools (read) | `memory_recall` → `POST /agentmemory/search` (auto-locates `sessionId`/project from the calling session) |
+| Model tools (write) | `memory_remember` → `POST /agentmemory/remember` (decisions, preferences, architecture facts, and similar) |
+| **Memory injection** | Sourced `user/message` via the `agent/pre-step` waterfall: ① **project recall** (`form: 'recall'`) injects the project-level `/context` cross-session window once per session; ② **semantic recall** (`form: 'semantic'`, optional) uses each user message to recall relevant memory titles via `/smart-search`; a pre-compaction re-inject keeps the project window when history compresses. The front end renders each injection as an independent "context injection" block (`ContextMessageNode`) |
+| **Configuration source** | Read-only `config` from the `cordis.yml` row; no UI, no file persistence |
 
-## 安装（静态组合）
+## Install (static composition)
 
-把 `cordis-row.example.yml` 里的行挂进 host 组合 `cordis.yml`（或自建 preset 目录的组合）。先把包装进 profile：
+Mount the row from `cordis-row.example.yml` into a host composition `cordis.yml` (or into a per-session agent preset's composition under `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`). First install the package into a profile (a `pnpm link` dev checkout works):
 
 ```bash
-dsh plugin add --profile web /Users/opal/workspace/DSH/plugins/agentmemory   # pnpm link 即可
+dsh plugin add --profile web /Users/opal/workspace/DSH/plugins/agentmemory
 ```
 
-然后挂行（`@` 是 YAML 保留标量起始，包名必须加引号）：
+Then add the row (`@` begins a YAML reserved scalar, so the package name must be quoted):
 
 ```yaml
 - insert:
@@ -35,121 +39,138 @@ dsh plugin add --profile web /Users/opal/workspace/DSH/plugins/agentmemory   # p
         enabled: true
 ```
 
-校验：`node scripts/boot-check.mjs`（7 项全绿，需 daemon 在 :3111）；`node test/smoke.mjs`（端到端，需 daemon 在 :3111）。
+Validate: `node scripts/boot-check.mjs` (7 checks, needs the daemon on :3111); `node test/smoke.mjs` (end-to-end, needs the daemon on :3111).
 
-> 需要 Node >= 20 和一个 `shell` 能力缝（标准 bash/pwsh 执行器）。
+> Requires Node >= 20 and a `shell` capability seam (the standard bash/pwsh executors).
 
-## 硬依赖：daemon 必须在加载时可达
+## Hard dependency: the daemon must be reachable at load
 
-agentmemory 是此插件的**硬依赖**。`apply()` 在注册任何能力（工具、监听器）之前先做一次 `curl <baseUrl>/agentmemory/livez`：
-- 可达且 `status: ok` → 继续加载；
-- 不可达 / 非 ok → **插件加载失败（响亮）**，不静默降级；
-- 无 `shell` 缝 → 直接失败。
+agentmemory is a **hard dependency**. `apply()` probes `<baseUrl>/agentmemory/livez` with one curl before registering any capability:
 
-> 这是**启动时**的硬门。运行期间 daemon 掉线仍被容忍——所有调用只记录、绝不 veto 会话生命周期或模型步。
+- reachable and `status: ok` → loading continues;
+- unreachable / not ok → **plugin load fails (loudly)**, no silent degradation;
+- no `shell` seam → load fails.
 
-## 配置键
+> This is a **load-time** hard gate. If the daemon drops during a run the plugin is tolerant: every call is logged and contained, and it never vetoes a session lifecycle event or a model step.
 
-`baseUrl`、`secret`（见下）、`enabled`（桥接总开关）、`enableTools`、`enableSessionStartEnd`、`curlTimeoutMs`、`observeBatchLimit`、`maxContentChars`、`maxArgsChars`、
-`injectContext`（项目 recall 开关，默认 `true`）、`injectContextMaxChars`（默认 `6000`）、`injectContextOnCompaction`（压缩前补注入，默认 `true`）、
-`injectSemantic`（自动语义 recall 开关，默认 `false`）、`injectSemanticMaxResults`（默认 `8`）、`injectSemanticMaxChars`（默认 `3000`）。
+## Configuration keys
 
-行里省略的键由 Cordis 按插件的 `Config` schema 填默认值——**不要手写合并逻辑**，Cordis 原生校验：非法值（如 `curlTimeoutMs: -5`）会让插件**加载失败**并给出明确错误。
+`baseUrl`, `secret` (below), `enabled` (bridge master switch), `enableTools`, `enableSessionStartEnd`, `curlTimeoutMs`, `observeBatchLimit`, `maxContentChars`, `maxArgsChars`,
+`injectContext` (project recall switch, default `true`), `injectContextMaxChars` (default `6000`), `injectContextOnCompaction` (pre-compaction re-inject, default `true`),
+`injectSemantic` (semantic recall switch, default `false`), `injectSemanticMaxResults` (default `8`), `injectSemanticMaxChars` (default `3000`).
 
-### secret：明文或环境变量引用
+Keys omitted from a row are filled with defaults by Cordis according to the plugin's `Config` schema — do **not** hand-write a merge. Cordis validates natively: an invalid value (such as `curlTimeoutMs: -5`) makes the plugin **fail to load** with a clear error. The full numeric bounds (min/max) are declared on each key in `index.js`.
 
-`secret` 支持两种形式，写不写明文由你决定：
+### `secret`: plaintext or an environment-variable reference
 
-| 形式 | 行为 |
+`secret` accepts two forms; whether you write plaintext is your choice:
+
+| Form | Behavior |
 | --- | --- |
-| `secret: "xxx"` | 明文，原样用作 Bearer token |
-| `secret: '${AGENTMEMORY_SECRET}'` | 读环境变量；未定义 → 加载失败（响亮） |
-| `secret: '${AGENTMEMORY_SECRET:default}'` | 读环境变量；未定义 → 用 `default` |
-| `secret: '${AGENTMEMORY_SECRET:?goes nowhere}'` | 读环境变量；未定义 → 报错 `goes nowhere` |
+| `secret: "xxx"` | Plaintext, used verbatim as the Bearer token |
+| `secret: '${AGENTMEMORY_SECRET}'` | Reads the env var; if unset → **load fails (loudly)** |
+| `secret: '${AGENTMEMORY_SECRET:default}'` | Reads the env var; if unset → uses `default` |
+| `secret: '${AGENTMEMORY_SECRET:?goes nowhere}'` | Reads the env var; if unset → fails with the message `goes nowhere` |
 
-环境变量经 `shell` 缝在 `apply()` 开始时解析（沙箱无直接 env 访问）。
+Environment variables are resolved through the `shell` seam at the start of `apply()` (the sandbox has no direct env access).
 
-## 记忆注入（read side → 模型 + 前端「上下文注入」块）
+## Memory injection (read side → model + "context injection" front-end block)
 
-桥接走 DSH 原生的 **`agent/pre-step`** 注入通道（与 `dsh-time-context` 同一范式），把 sourced `user/message` append 到进入 step 的消息批次尾部。两条注入路线各司其职，都做事件级去重，**不在每个 tool step 重复注入**。
+The bridge uses DSH's native **`agent/pre-step`** injection channel (the same pattern as `dsh-time-context`) and appends sourced `user/message` rows to the tail of the incoming message batch. The two injection routes each have a distinct job and both deduplicate at the event level — they do **not** re-inject on every tool step.
 
-### 路线 1 —— 项目 recall（`form:'recall'`，默认开）
+### Route 1 — Project recall (`form: 'recall'`, on by default)
 
-每会话把 agentmemory 的 **`/context` 项目级跨会话窗口**（「这个项目之前干过啥」，排除当前会话）注入**一次**。`session/created` → `/session/start` 从响应缓存 `context`；`agent/pre-step` 的首个有缓存的 step append 一次（`st.injectedContext` 去重）；每条 `user/message` 仍异步刷新缓存。
+Injects **once** per session the agentmemory **`/context` project-level cross-session window** ("what this project has done before", excluding the current session). `session/created` → `/session/start` caches `context` from the response; the first step in `agent/pre-step` that has a cached window appends it once (`st.injectedContext` dedup); every `user/message` still refreshes the cache asynchronously.
 
-### 路线 2 —— 自动语义 recall（`form:'semantic'`，默认关）
+### Route 2 — Semantic recall (`form: 'semantic'`, off by default)
 
-每条 `user/message` 用原文做一次 `/smart-search`（BM25+向量+图），把召回记忆的**标题**组装成一条注入消息（`st.semanticSeq` 逐消息去重）。精确召回（`/search`）仍留给 agent 显式调用 `memory_recall` 工具。
+Each `user/message` runs a `/smart-search` (BM25 + vector + graph) on the raw text and assembles the recalled memory **titles** into one injected message (`st.semanticSeq` dedups per message). Precise recall (`/search`) is still left to the agent's explicit `memory_recall` tool.
 
-### 压缩前补注入（`injectContextOnCompaction`，默认开）
+### Pre-compaction re-inject (`injectContextOnCompaction`, on by default)
 
-`compaction/start` 触发一次 `/context` 刷新，并在下一个 `agent/pre-step` 把最新项目窗口再注入一次，避免项目背景随历史压缩丢失。
+`compaction/start` triggers a `/context` refresh and the next `agent/pre-step` re-injects the latest project window so project background survives history compression.
 
-## 生命周期事件 → agentmemory 映射
+## Session lifecycle → agentmemory mapping
 
-桥接把每个 DSH 事件映射成 agentmemory 的 **标准 hookType**，让 daemon 的压缩管线能读到真实内容；自定义 hookType 会让压缩只收到 `{timestamp, hookType}`，摘要退化。
+The bridge maps every DSH event to an agentmemory **standard hookType** so the daemon's compression pipeline reads real content (custom hookTypes collapse to `{timestamp, hookType}`, degrading summaries):
 
-| DSH 事件 | hookType | data 标准字段 | dedup 判别 |
+| DSH event | hookType | standard `data` fields | dedup discriminator |
 | --- | --- | --- | --- |
-| `user/message` | `prompt_submit` | `prompt=content` | `tool_input=content`（同 prompt 自然合并） |
-| `assistant/message` | `post_tool_use` | `tool_name='assistant_message'`、`tool_output=content` | `tool_input='#'+seq`（唯一；内容不进 Input） |
-| `tool/call` | `dsh_tool_call` | `tool_name='dsh_call'` | `tool_input='call#'+callId`（不与结果合并） |
-| `tool/result`（ok） | `post_tool_use` | `tool_name/tool_input/tool_output`（callMeta 兜底） | `tool_input=args` |
-| `tool/result`（err） | `post_tool_failure` | 同上 + `error` | 同上 |
-| `turn/end` | `dsh_turn_end` | — | `tool_input='turn#'+seq`（唯一） |
+| `user/message` | `prompt_submit` | `prompt=content` | `tool_input=content` (identical prompts merge naturally) |
+| `assistant/message` | `post_tool_use` | `tool_name='assistant_message'`, `tool_output=content` | `tool_input='#'+seq` (unique; content not in Input) |
+| `tool/call` | `dsh_tool_call` | `tool_name='dsh_call'` | `tool_input='call#'+callId` (not merged with the result) |
+| `tool/result` (ok) | `post_tool_use` | `tool_name/tool_input/tool_output` (callMeta fallback) | `tool_input=args` |
+| `tool/result` (err) | `post_tool_failure` | same + `error` | `tool_input=args` |
+| `turn/end` | `dsh_turn_end` | — | `tool_input='turn#'+seq` (unique) |
 
-**dedup-safe 设计**：agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_input[0..500])` 做 5 分钟 TTL 去重，命中即丢弃。桥接用每会话单调 seq 与自然内容/`callId` 做 `tool_input` 判别，保证同类多条都落库，同时保留「相同 prompt / 相同 (tool,args) 结果」的自然合并。
+**Dedup-safe design**: agentmemory's `mem::observe` drops duplicates by `sha256(sessionId, tool_name||hookType, tool_input[0..500])` with a 5-minute TTL; a hit discards the observation. The bridge uses a per-session monotonic `seq` and natural content/`callId` as the `tool_input` discriminator, so multiple rows of the same kind all persist while identical prompts / identical `(tool, args)` results still merge naturally.
 
-## 模型工具
+## Model tools
 
-| 工具 | 参数 | 说明 |
+| Tool | Arguments | Description |
 | --- | --- | --- |
-| `memory_recall` | `query` (必填), `limit?`, `sessionId?`, `project?` | 按调用会话自动定位 sessionId/project，跨会话召回 |
-| `memory_remember` | `content` (必填), `type?`, `concepts?`, `ttlDays?` | 主动固化记忆；type ∈ pattern/preference/architecture/bug/workflow/fact |
+| `memory_recall` | `query` (required), `limit?`, `sessionId?`, `project?` | Auto-locates sessionId/project from the calling session; recalls across sessions |
+| `memory_remember` | `content` (required), `type?`, `concepts?`, `ttlDays?` | Curated, durable memory; `type` ∈ pattern/preference/architecture/bug/workflow/fact |
 
-工具用 `defineTool` 定义、经 `ctx.tools.register` 注册（`inject: ['tools']`），随插件 Fiber 生命周期自动清理。`execute` 失败返回 `{ok:false,error}` 而非抛错。
+Tools are defined with `defineTool` and registered through `ctx.tools.register` (`inject: ['tools']`), and are cleaned up automatically with the plugin Fiber lifecycle. On failure, `execute` returns `{ok: false, error}` rather than throwing.
 
-## 传输与失败语义
+## Model Experience
 
-- 沙箱无 `fetch`/require/timers；出网走 `shell` 能力缝，JSON body 走 curl stdin（`--data-binary @-`）。
-- **绝不 veto 生命周期**：监听器全量 try/catch。
-- 基础设施失败重排队列、下个 checkpoint 重试；payload 级失败记录后丢弃。
-- flush 竞态：flush 在途时新事件经 `dirty` 标志被在途循环补发，不丢。
+### Common requests
 
-## 验证
+#### What the model sees
+
+The bridge does not alter accepted input. Its observable model input is additive after the incoming batch: one injected sourced `user/message` per projective event, whose `text` is the project `/context` window (route 1), the semantic recall titles (route 2), or a pre-compaction re-inject of the project window (`source.kind === 'plugin'`, `plugin === 'agentmemory'`, `form` `'recall'` / `'semantic'`). Tool calls `memory_recall` and `memory_remember` are registered only when `enableTools` is true.
+
+#### Token effect
+
+Conditional. Injection contributes extra input tokens only at the dedup boundaries — once per session for project recall, once per user message for semantic recall when enabled, and once per compaction — not per tool step. Capped by `injectContextMaxChars` / `injectSemanticMaxChars`. Tool schemas add a small fixed token cost while `enableTools` is true. Tool responses are returned to the model's context window normally.
+
+#### KV Cache effect
+
+Append-only, prefix-stable. Injected messages are appended at the tail of the step's message batch, so the prior message prefix is preserved and reusable; re-injection changes the suffix. The dedup conditions (`injectedContext`, `injectedSemanticKey`, `compactionInject`) prevent repeated appends of the same block at the same boundary, so a stable prefix is not invalidated by the bridge's own activity across steps.
+
+## Transport and failure semantics
+
+- The sandbox has no `fetch`/require/timers; outbound traffic goes through the `shell` capability seam, one curl per call with the JSON body on stdin (`--data-binary @-`).
+- **Never veto a lifecycle event**: listeners are fully try/catch guarded.
+- Infrastructure failures re-queue and retry at the next checkpoint; payload-level failures are logged and dropped.
+- Flush race: if a flush is in flight when new events arrive, the `dirty` flag makes the in-flight loop re-send them, so nothing is lost.
+
+## Verification
 
 ```bash
 cd plugins/agentmemory
-node scripts/boot-check.mjs   # 模块 + Config schema + daemon livez + peer deps（7 项）
-node test/smoke.mjs           # 端到端（需 daemon 在 :3111）
+node scripts/boot-check.mjs   # module + Config schema + daemon livez + peer deps (7 checks)
+node test/smoke.mjs           # end-to-end (needs the daemon on :3111)
 ```
 
-冒烟测试覆盖：Config schema 校验（含非法值拒绝）、apply 的 livez 硬门（含不可达响亮失败）、`defineTool` 工具注册、secret 三种 env 引用、观察落库与 session 状态、`agent/pre-step` 注入形状与水印穿透。
+The smoke test covers: Config schema validation (including rejecting invalid values), the `apply` liveness hard gate (including loud failure on an unreachable daemon), `defineTool` tool registration, the three secret env-reference forms, observation persistence and session state, and the `agent/pre-step` injection shape with watermark pass-through.
 
-## 本地开发：解析 peer 依赖
+## Local development: resolving peer dependencies
 
-插件 import `@deepseek-ai/schemastery`、`@deepseek-ai/dsh-tools`（peer deps，运行时由 harness 安装解析）。要在本仓库用 plain Node 跑 boot-check / smoke 而不装整个 harness，把内置包链进来：
+The plugin imports `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-tools` (peer deps, resolved by the harness at runtime). To run boot-check / smoke with plain Node from this repo without installing the whole harness, link the built-in packages in:
 
 ```bash
 mkdir -p node_modules
 ln -s <harness>/node_modules/@deepseek-ai node_modules/@deepseek-ai
 ```
 
-（`<harness>` 指 dsh 全局安装目录；在 profile 里经 pnpm 安装时它们自动可解析，无需这一步。）
+(`<harness>` is the global dsh install directory; when installed via pnpm in a profile these resolve automatically and this step is unnecessary.)
 
-## 文件
+## Files
 
-| 文件 | 用途 |
+| File | Purpose |
 | --- | --- |
-| `index.js` | 单一静态入口：`Config` schema、`inject`、`apply`（生命周期 + 工具 + 注入 + livez 硬门） |
-| `index.d.ts` | `Config` 类型与插件导出的类型面 |
-| `cordis-row.example.yml` | 静态组合行示例（`name` 用可解析包名） |
-| `scripts/boot-check.mjs` | 启动/CI 就绪检查（模块 + schema + daemon + peer deps，7 项） |
-| `test/smoke.mjs` | 端到端冒烟测试 |
-| `package.json` | 可发布结构（`dsh-agentmemory`，含 peer deps） |
+| `index.js` | Single static entry: `Config` schema, `inject`, `apply` (lifecycle + tools + injection + livez hard gate) |
+| `index.d.ts` | `Config` type and the plugin's exported type surface |
+| `cordis-row.example.yml` | Static composition row example (`name` uses a resolvable package name) |
+| `scripts/boot-check.mjs` | Boot/CI readiness check (module + schema + daemon + peer deps, 7 checks) |
+| `test/smoke.mjs` | End-to-end smoke test |
+| `package.json` | Publishable structure (`dsh-agentmemory`, with peer deps) |
 
-## 已知边界
+## Known Limitations and Deferred Work
 
-- **记忆默认跨会话共享**（未传 `agentId`）；需要隔离时给 observe/remember 加 `agentId`。
-- `project` 解析顺序：`AGENTMEMORY_PROJECT_NAME` 环境变量 → git toplevel basename → cwd basename。
-- **未改动任何 `@deepseek-ai` 包**；未改 shipped preset 安装目录。
+- **Memory is shared across sessions by default** (no `agentId` is passed); to isolate, add an `agentId` to `observe`/remember calls.
+- **Project resolution order**: `AGENTMEMORY_PROJECT_NAME` env var → git toplevel basename → cwd basename.
+- **The bridge does not modify any `@deepseek-ai` package** and does not touch the shipped preset install directory.
