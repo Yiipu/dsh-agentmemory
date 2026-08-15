@@ -22,11 +22,13 @@
 
 ## 安装（静态组合）
 
-把 `cordis-row.example.yml` 里的行挂进 host 组合 `cordis.yml`（或 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 下的每会话 preset 组合）。先把包装进 profile（`pnpm link` dev 检出也可）：
+把 `cordis-row.example.yml` 里的行挂进 host 组合 `cordis.yml`（或 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 下的每会话 preset 组合）。先从 GitHub 把包装进 profile：
 
 ```bash
-dsh plugin add --profile web /Users/opal/workspace/DSH/plugins/agentmemory
+dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 ```
+
+（本地 dev 检出也可用：`dsh plugin --profile web add /path/to/checkout`。）
 
 然后挂行（`@` 是 YAML 保留标量起始，包名必须加引号）：
 

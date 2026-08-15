@@ -22,11 +22,13 @@ All configuration comes from the plugin's row in `cordis.yml` — editing the `c
 
 ## Install (static composition)
 
-Mount the row from `cordis-row.example.yml` into a host composition `cordis.yml` (or into a per-session agent preset's composition under `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`). First install the package into a profile (a `pnpm link` dev checkout works):
+Mount the row from `cordis-row.example.yml` into a host composition `cordis.yml` (or into a per-session agent preset's composition under `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`). First install the package from GitHub into a profile:
 
 ```bash
-dsh plugin add --profile web /Users/opal/workspace/DSH/plugins/agentmemory
+dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 ```
+
+(A local dev checkout also works via `dsh plugin --profile web add /path/to/checkout`.)
 
 Then add the row (`@` begins a YAML reserved scalar, so the package name must be quoted):
 
