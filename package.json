@@ -1,0 +1,44 @@
+{
+  "name": "@dsh-plugins/agentmemory",
+  "version": "0.4.0",
+  "description": "DSH ↔ agentmemory session-memory bridge (backend-only). Mirrors session lifecycle into agentmemory with standard hookTypes (compression-friendly, dedup-safe), exposes memory_recall / memory_remember tools, and injects memory context via agent/pre-step. Configuration comes from the cordis.yml row.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "cordis-row.example.yml",
+    "scripts/",
+    "test/",
+    "README.md",
+    "cordis.patch.yml"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "agentmemory",
+    "memory",
+    "plugin"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

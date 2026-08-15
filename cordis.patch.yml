@@ -1,0 +1,6 @@
+# dsh-agentmemory bundle patch: mount the host bridge as a composition row.
+# `name` is the resolvable package name; Cordis validates its config against
+# the plugin's Config schema. See cordis-row.example.yml for the full config.
+- insert:
+    - id: agentmemory-bridge
+      name: "@dsh-plugins/agentmemory"

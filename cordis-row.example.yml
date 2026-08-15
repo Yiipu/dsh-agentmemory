@@ -1,0 +1,58 @@
+# ============================================================================
+# dsh-agentmemory — static composition row (cordis.yml)
+# ----------------------------------------------------------------------------
+# Backend-only bridge. One way to configure this plugin: edit the `config` of
+# its cordis.yml row — there is no browser Settings UI and no persisted config
+# file. Cordis validates the row against the plugin's Config schema and fills
+# defaults for anything omitted, so a minimal row is just {name}:
+#
+#   - insert:
+#       - id: agentmemory-bridge
+#         name: "@dsh-plugins/agentmemory"
+#
+# Where to put it: the host composition cordis.yml (deployment config), or a
+# per-session agent preset under ${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/.
+# Rows are {id, name, config?} — see the cordis preset for the exact grammar.
+#
+# `name` must be a RESOLVABLE PACKAGE NAME (quoted, because '@' is a YAML
+# reserved scalar start). Install the package into your profile first:
+#   dsh plugin add --profile web /path/to/plugins/agentmemory
+# A pnpm link (file: dev checkout) works great for development.
+#
+# HMR / cache: host index.js edits take effect when the loader re-imports the
+# row — bump the name's version (e.g. @dsh-plugins/agentmemory@0.4.0) once to
+# bust Node's ESM cache.
+#
+# The daemon is a HARD dependency: the plugin checks livez on load and fails
+# loudly if it is unreachable, so start agentmemory (port 3111) first.
+#
+# Injection: with injectContext enabled the plugin injects the project-level
+# /context window ONCE per session (seeded at session/start and refreshed on
+# each user turn) as a sourced user/message via agent/pre-step;
+# injectSemantic (off by default) adds a per-user-message /smart-search recall
+# block; injectContextOnCompaction re-injects right before compaction.
+# ============================================================================
+
+- insert:
+    - id: agentmemory-bridge
+      name: "@dsh-plugins/agentmemory"
+      config:
+        baseUrl: http://localhost:3111
+        secret: ""                     # Bearer token when AGENTMEMORY_SECRET is set.
+                                       # A bare string is used verbatim, or read from an env var:
+                                       #   ${AGENTMEMORY_SECRET}          unset → load fails
+                                       #   ${AGENTMEMORY_SECRET:default}  unset → "default"
+                                       #   ${AGENTMEMORY_SECRET:?goes nowhere}  unset → error "goes nowhere"
+        enabled: true                 # observation bridge master switch
+        enableTools: true             # register memory_recall / memory_remember
+        enableSessionStartEnd: true
+        curlTimeoutMs: 4000
+        observeBatchLimit: 20
+        maxContentChars: 4000
+        maxArgsChars: 2000
+        injectContext: true              # project recall: inject /context once per session
+        injectContextMaxChars: 6000      # cap project context window text
+        injectContextOnCompaction: true  # re-inject /context right before compaction
+        injectSemantic: false            # semantic recall: per-user-message /smart-search injection
+        injectSemanticMaxResults: 8      # cap smart-search results folded into the block
+        injectSemanticMaxChars: 3000     # cap rendered semantic recall text
