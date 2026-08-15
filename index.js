@@ -22,7 +22,9 @@
  * never veto a session lifecycle event or fail a model step.
  *
  * Install: mount `name: "dsh-agentmemory"` in a cordis.yml row (see
- * cordis-row.example.yml). Requires Node >= 20 and a `shell` seam on the host.
+ * cordis-row.example.yml). Requires Node >= 20 and a `shell` seam on the host;
+ * `inject: ['tools', 'shell']` makes Cordis wait for that seam before `apply`,
+ * so the seam is present at load instead of racing the `bash-sandbox` provider.
  */
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -62,7 +64,7 @@ export const Config = Schema.object({
   injectSemanticMaxChars: Schema.number().min(1).max(100000).default(3000),
 })
 
-export const inject = ['tools']
+export const inject = ['tools', 'shell']
 
 // ── pure helpers ─────────────────────────────────────────────────────────────
 

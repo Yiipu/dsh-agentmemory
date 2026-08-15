@@ -112,7 +112,7 @@ agentmemory 是此插件的**硬依赖**。`apply()` 在注册任何能力之前
 | `memory_recall` | `query` (必填), `limit?`, `sessionId?`, `project?` | 按调用会话自动定位 sessionId/project，跨会话召回 |
 | `memory_remember` | `content` (必填), `type?`, `concepts?`, `ttlDays?` | 主动固化记忆；type ∈ pattern/preference/architecture/bug/workflow/fact |
 
-工具用 `defineTool` 定义、经 `ctx.tools.register` 注册（`inject: ['tools']`），随插件 Fiber 生命周期自动清理。`execute` 失败返回 `{ok:false,error}` 而非抛错。
+工具用 `defineTool` 定义、经 `ctx.tools.register` 注册，守护进程传输走 host `shell` seam（`inject: ['tools', 'shell']`）；二者随插件 Fiber 生命周期自动清理。`execute` 失败返回 `{ok:false,error}` 而非抛错。
 
 ## Model Experience
 

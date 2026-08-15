@@ -112,7 +112,7 @@ The bridge maps every DSH event to an agentmemory **standard hookType** so the d
 | `memory_recall` | `query` (required), `limit?`, `sessionId?`, `project?` | Auto-locates sessionId/project from the calling session; recalls across sessions |
 | `memory_remember` | `content` (required), `type?`, `concepts?`, `ttlDays?` | Curated, durable memory; `type` ∈ pattern/preference/architecture/bug/workflow/fact |
 
-Tools are defined with `defineTool` and registered through `ctx.tools.register` (`inject: ['tools']`), and are cleaned up automatically with the plugin Fiber lifecycle. On failure, `execute` returns `{ok: false, error}` rather than throwing.
+Tools are defined with `defineTool` and registered through `ctx.tools.register`, and daemon transport runs over the host `shell` seam (`inject: ['tools', 'shell']`); both are cleaned up automatically with the plugin Fiber lifecycle. On failure, `execute` returns `{ok: false, error}` rather than throwing.
 
 ## Model Experience
 

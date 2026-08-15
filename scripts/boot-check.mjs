@@ -31,8 +31,8 @@ try {
   const okSurface = typeof mod.name === 'string' && Array.isArray(mod.inject) && mod.Config && typeof mod.Config['~standard'] === 'object' && typeof mod.apply === 'function'
   if (okSurface) pass('plugin exports name/inject/Config/apply')
   else fail('plugin missing part of the Cordis surface (name/inject/Config/apply)')
-  if (Array.isArray(mod.inject) && mod.inject.includes('tools')) pass('inject requires tools')
-  else fail('inject should include tools')
+  if (Array.isArray(mod.inject) && mod.inject.includes('tools') && mod.inject.includes('shell')) pass('inject requires tools + shell')
+  else fail('inject should include tools and shell')
 
   // 2. Config schema validation
   const good = mod.Config['~standard'].validate({})

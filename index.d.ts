@@ -43,6 +43,6 @@ export interface AgentmemoryConfig {
 }
 
 export const name: 'agentmemory'
-export const inject: ['tools']
+export const inject: ['tools', 'shell']
 export const Config: Schema<AgentmemoryConfig>
 export function apply(ctx: Parameters<typeof Plugin['apply']>[0], config: AgentmemoryConfig): void | Promise<void>

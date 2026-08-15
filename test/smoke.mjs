@@ -78,7 +78,7 @@ const { name, Config, inject, apply } = mod
 // ══ 1) Config schema validation ─────────────────────────────────────────────
 console.log('── 1) Config schema (fail-loud) ──')
 check('plugin exports name/Config/inject/apply', name === 'agentmemory' && !!Config && Array.isArray(inject) && typeof apply === 'function')
-check('inject requires tools', inject.includes('tools'))
+check('inject requires tools + shell', inject.includes('tools') && inject.includes('shell'))
 const bad = Config['~standard'].validate({ curlTimeoutMs: -5 })
 check('invalid numeric config rejected (fail loud)', !!bad.issues, bad.issues && bad.issues[0] && bad.issues[0].message)
 const good = Config['~standard'].validate({})
