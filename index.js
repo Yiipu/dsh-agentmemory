@@ -42,6 +42,13 @@ export const Config = Schema.object({
   enableTools: Schema.boolean().default(true),
   /** Mirror session/start and session/end rows. */
   enableSessionStartEnd: Schema.boolean().default(true),
+  /**
+   * Agent identity stamped on every written row (session/observe/remember).
+   * Resolution: env AGENT_ID (the daemon's own convention) → this value → 'dsh'.
+   * Because written rows carry this agentId, an explicit memory recall can filter
+   * by agent; historical rows written before this existed have agentId undefined.
+   */
+  agentId: Schema.string().default('dsh'),
   /** Per-request curl deadline. */
   curlTimeoutMs: Schema.number().min(1).max(60000).default(4000),
   /** Flush a session buffer at this many buffered observations. */
@@ -205,6 +212,18 @@ export async function apply(ctx, config) {
   // Secret: resolve an env reference before anything touches the daemon.
   cfg.secret = await resolveSecret(cfg.secret, getShell)
 
+  // Agent identity stamped on every written row: env AGENT_ID (the daemon's official
+  // convention) → config agentId (default 'dsh'). Reads env via the shell seam
+  // (best-effort), mirroring resolveProject.
+  cfg.agentId = (await (async () => {
+    const shell = getShell(); if (!shell) return cfg.agentId
+    try {
+      const envRes = await shell.run(shell.resolve({ command: 'printenv AGENT_ID || true', timeoutMs: 2000, stdoutMaxBytes: 1024 }))
+      const v = envRes && envRes.exitCode === 0 && envRes.stdout ? envRes.stdout.text.trim() : ''
+      return v || cfg.agentId
+    } catch (_agentIdEnv) { return cfg.agentId }
+  } )())
+
   // Hard-dependency gate: the daemon must be reachable at load (or the plugin
   // fails loudly). Uses one liveness probe with the configured curl deadline.
   {
@@ -288,7 +307,7 @@ export async function apply(ctx, config) {
   }
 
   async function postObserve(st, obs) {
-    await post('/agentmemory/observe', { hookType: obs.hookType, sessionId: st.id, project: st.project, cwd: st.cwd, timestamp: obs.timestamp, data: obs.data })
+    await post('/agentmemory/observe', { hookType: obs.hookType, sessionId: st.id, project: st.project, cwd: st.cwd, agentId: cfg.agentId, timestamp: obs.timestamp, data: obs.data })
   }
 
   async function flushSession(st) {
@@ -315,7 +334,7 @@ export async function apply(ctx, config) {
     }
     try {
       st.project = await resolveProject(st.cwd)
-      const body = await postJson('/agentmemory/session/start', { sessionId: st.id, project: st.project, cwd: st.cwd })
+      const body = await postJson('/agentmemory/session/start', { sessionId: st.id, project: st.project, cwd: st.cwd, agentId: cfg.agentId })
       st.started = true
       if (cfg.injectContext && body && typeof body.context === 'string') st.context = body.context
     } catch (err) { console.error('[agentmemory] session/start failed: ' + err.message) }
@@ -363,19 +382,22 @@ export async function apply(ctx, config) {
       parameters: {
         query: { type: 'string', required: true, description: 'What to recall — a phrase describing the memory you need.' },
         limit: { type: 'integer', description: 'Maximum number of results (default 8).' },
-        sessionId: { type: 'string', description: 'Optional DSH session id to scope recall; defaults to the calling session.' },
         project: { type: 'string', description: 'Optional agentmemory project filter; defaults to the calling session cwd basename.' },
+        agentId: { type: 'string', description: 'Optional agent filter. Omit to recall across every agent of the project (includes historical rows that were written before agentId existed). Set to the plugin’s agentId (default "dsh", or env AGENT_ID) to scope to one agent only.' },
       },
       output: { schema: { type: 'object', additionalProperties: true }, render(args, value) { return [{ type: 'text', text: JSON.stringify(value, null, 2) }] } },
       async execute(args, exec) {
         try {
           const a = args && typeof args === 'object' ? args : {}
           const session = exec && exec.agent ? exec.agent.session : undefined
-          const sid = str(a.sessionId) || (session ? String(session.id) : '')
           const project = str(a.project) || (session && session.header ? projectOf(session.header.cwd) : undefined)
           const body = { query: str(a.query), limit: typeof a.limit === 'number' ? Math.min(Math.max(1, Math.floor(a.limit)), 50) : 8 }
           if (project) body.project = project
-          if (sid) body.agentId = sid
+          // Optional agent scope. When absent we recall across every agent of the
+          // project (so historical rows with undefined agentId stay recallable).
+          // Do NOT pass the DSH session id here — observations are stamped with the
+          // plugin's agentId (config default 'dsh', or env AGENT_ID), not the session id.
+          if (str(a.agentId)) body.agentId = str(a.agentId).trim()
           if (!str(a.query).trim()) return { ok: false, error: 'query must be non-empty' }
           const result = await postJson('/agentmemory/search', body, exec && exec.signal)
           return result && typeof result === 'object' ? result : { results: [], raw: result }
@@ -403,6 +425,7 @@ export async function apply(ctx, config) {
           if (typeof a.type === 'string' && ['pattern', 'preference', 'architecture', 'bug', 'workflow', 'fact'].includes(a.type)) body.type = a.type
           if (Array.isArray(a.concepts)) body.concepts = a.concepts.filter((c) => typeof c === 'string').slice(0, 20)
           if (typeof a.ttlDays === 'number' && a.ttlDays > 0) body.ttlDays = Math.floor(a.ttlDays)
+          body.agentId = cfg.agentId
           if (session && session.header && typeof session.header.cwd === 'string') body.project = projectOf(session.header.cwd)
           const result = await postJson('/agentmemory/remember', body, exec && exec.signal)
           return result && typeof result === 'object' ? result : { ok: false, raw: result }

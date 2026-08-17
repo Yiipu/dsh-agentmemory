@@ -15,7 +15,7 @@
 | 能力 | 实现 |
 | --- | --- |
 | 会话生命周期 → agentmemory | `session/created` → `session/start`；`session/event` → `observe`（缓冲）；`session/flush` → 落库；`session/disposed` → `session/end` |
-| 模型工具（读） | `memory_recall` → `POST /agentmemory/search`（按调用会话自动定位 sessionId/project） |
+| 模型工具（读） | `memory_recall` → `POST /agentmemory/search`（按调用会话自动定位 project） |
 | 模型工具（写） | `memory_remember` → `POST /agentmemory/remember`（决策/偏好/架构事实等） |
 | **记忆注入** | 经 `agent/pre-step` waterfall 注入 sourced `user/message`：①**项目 recall**（`form: 'recall'`）每会话把项目级 `/context` 跨会话窗口注入一次；②**自动语义 recall**（`form: 'semantic'`，可选）每条用户消息经 `/smart-search` 召回相关记忆标题注入一次；压缩前可再注入一次，避免项目窗口随历史压缩丢失。前端把每次注入渲染为独立的「上下文注入」块（`ContextMessageNode`） |
 | **配置来源** | 只读 `cordis.yml` 行的 `config`；无 UI、无文件持久化 |
@@ -111,7 +111,7 @@ agentmemory 是此插件的**硬依赖**。`apply()` 在注册任何能力之前
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| `memory_recall` | `query` (必填), `limit?`, `sessionId?`, `project?` | 按调用会话自动定位 sessionId/project，跨会话召回 |
+| `memory_recall` | `query` (必填), `limit?`, `project?`, `agentId?` | 按调用会话自动定位 project，跨会话召回。按 project 过滤，可选按 `agentId`（不传 = 项目的所有 agent，包含历史无 agent 的记录）。写入的记录都带插件 agentId：env `AGENT_ID` → config `agentId` → 默认 `"dsh"` |
 | `memory_remember` | `content` (必填), `type?`, `concepts?`, `ttlDays?` | 主动固化记忆；type ∈ pattern/preference/architecture/bug/workflow/fact |
 
 工具用 `defineTool` 定义、经 `ctx.tools.register` 注册，守护进程传输走 host `shell` seam（`inject: ['tools', 'shell']`）；二者随插件 Fiber 生命周期自动清理。`execute` 失败返回 `{ok:false,error}` 而非抛错。
@@ -174,5 +174,6 @@ ln -s <harness>/node_modules/@deepseek-ai node_modules/@deepseek-ai
 ## 已知边界
 
 - **记忆默认跨会话共享**（未传 `agentId`）；需要隔离时给 observe/remember 加 `agentId`。
+- **Agent 隔离为可选**：写入记录都带插件 agentId（env `AGENT_ID` → config `agentId` → 默认 `"dsh"`），`memory_recall` 可按 `agentId` 过滤。不会把 DSH session id 当 agentId 传（观察记录打的是插件 agentId，并非 session id）。
 - **project 解析顺序**：`AGENTMEMORY_PROJECT_NAME` 环境变量 → git toplevel basename → cwd basename。
 - **未改动任何 `@deepseek-ai` 包**；未改 shipped preset 安装目录。

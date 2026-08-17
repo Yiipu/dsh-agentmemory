@@ -15,7 +15,7 @@ All configuration comes from the plugin's row in `cordis.yml` — editing the `c
 | Capability | Implementation |
 | --- | --- |
 | Session lifecycle → agentmemory | `session/created` → `session/start`; `session/event` → `observe` (buffered); `session/flush` → flush to disk; `session/disposed` → `session/end` |
-| Model tools (read) | `memory_recall` → `POST /agentmemory/search` (auto-locates `sessionId`/project from the calling session) |
+| Model tools (read) | `memory_recall` → `POST /agentmemory/search` (auto-locates `project` from the calling session) |
 | Model tools (write) | `memory_remember` → `POST /agentmemory/remember` (decisions, preferences, architecture facts, and similar) |
 | **Memory injection** | Sourced `user/message` via the `agent/pre-step` waterfall: ① **project recall** (`form: 'recall'`) injects the project-level `/context` cross-session window once per session; ② **semantic recall** (`form: 'semantic'`, optional) uses each user message to recall relevant memory titles via `/smart-search`; a pre-compaction re-inject keeps the project window when history compresses. The front end renders each injection as an independent "context injection" block (`ContextMessageNode`) |
 | **Configuration source** | Read-only `config` from the `cordis.yml` row; no UI, no file persistence |
@@ -111,7 +111,7 @@ The bridge maps every DSH event to an agentmemory **standard hookType** so the d
 
 | Tool | Arguments | Description |
 | --- | --- | --- |
-| `memory_recall` | `query` (required), `limit?`, `sessionId?`, `project?` | Auto-locates sessionId/project from the calling session; recalls across sessions |
+| `memory_recall` | `query` (required), `limit?`, `project?`, `agentId?` | Auto-locates project from the calling session; recalls across sessions. Scope by project, and optionally by `agentId` (omit = across every agent of the project, so historical pre-agentId rows stay recallable). Written rows are stamped with the plugin agentId: env `AGENT_ID` → config `agentId` → default `"dsh"` |
 | `memory_remember` | `content` (required), `type?`, `concepts?`, `ttlDays?` | Curated, durable memory; `type` ∈ pattern/preference/architecture/bug/workflow/fact |
 
 Tools are defined with `defineTool` and registered through `ctx.tools.register`, and daemon transport runs over the host `shell` seam (`inject: ['tools', 'shell']`); both are cleaned up automatically with the plugin Fiber lifecycle. On failure, `execute` returns `{ok: false, error}` rather than throwing.
@@ -168,11 +168,13 @@ ln -s <harness>/node_modules/@deepseek-ai node_modules/@deepseek-ai
 | `index.d.ts` | `Config` type and the plugin's exported type surface |
 | `cordis-row.example.yml` | Static composition row example (`name` uses a resolvable package name) |
 | `scripts/boot-check.mjs` | Boot/CI readiness check (module + schema + daemon + peer deps, 7 checks) |
-| `test/smoke.mjs` | End-to-end smoke test |
+| `scripts/cleanup-smoke-sessions.mjs` | One-shot purge of `dsh-bridge-smoke-*` session/obs rows from the live daemon (dry-run default; `DRY_RUN=false` to delete) |
+| `test/smoke.mjs` | End-to-end smoke test (writes to the isolated `dsh-smoke` project, never project `DSH`; self-cleans via the `iii` CLI when available) |
 | `package.json` | Publishable structure (`dsh-agentmemory`, with peer deps) |
 
 ## Known Limitations and Deferred Work
 
 - **Memory is shared across sessions by default** (no `agentId` is passed); to isolate, add an `agentId` to `observe`/remember calls.
+- **Agent isolation is opt-in**: written rows carry the plugin agentId (env `AGENT_ID` → config `agentId` → default `"dsh"`), so `memory_recall` can filter by `agentId`. It does NOT pass the DSH session id as `agentId` (observations are stamped with the plugin agentId, not the session id).
 - **Project resolution order**: `AGENTMEMORY_PROJECT_NAME` env var → git toplevel basename → cwd basename.
 - **The bridge does not modify any `@deepseek-ai` package** and does not touch the shipped preset install directory.

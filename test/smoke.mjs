@@ -14,13 +14,23 @@
  *
  * Run:  node test/smoke.mjs   (agentmemory daemon on :3111)
  *
+ * IMPORTANT: every run writes fixture data into the LIVE daemon under the
+ * dedicated test project "dsh-smoke" (never project "DSH" or any real repo).
+ * The test self-cleans its session when the `iii` CLI is on PATH (state::delete),
+ * and prints a notice otherwise — leftover rows live only in the isolated
+ * dsh-smoke bucket and are purged by scripts/cleanup-smoke-sessions.mjs.
+ *
  * Requires the @deepseek-ai/* peer deps to be resolvable from this package.
  * In a pnpm profile they come from the harness install; for local runs use the
  * node_modules symlink set up in the repo (see README).
  */
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 
 const BASE = 'http://localhost:3111'
+// Dedicated test project so smoke runs NEVER pollute a real project. Kept in a
+// nonexistent dir so resolveProject's git lookup falls back to projectOf(cwd).
+const SMOKE_PROJECT = 'dsh-smoke'
+const SMOKE_CWD = '/nonexistent/dsh-smoke-test'
 const SESSION_ID = 'dsh-bridge-smoke-' + Date.now()
 
 // ── fake shell seam: resolve() fills defaults, run() execs real curl ────────
@@ -55,7 +65,7 @@ function makeCtx(tools) {
   return ctx
 }
 
-const session = { id: SESSION_ID, header: { cwd: '/Users/opal/workspace/DSH', createdAt: Date.now() } }
+const session = { id: SESSION_ID, header: { cwd: SMOKE_CWD, createdAt: Date.now() } }
 const ev = (type, data) => ({ type, seq: 0, time: Date.now(), data })
 const execCtx = { agent: { session }, signal: new AbortController().signal }
 
@@ -187,15 +197,28 @@ check('session row completed', sessRows.length === 1 && sessRows[0].status === '
 
 // ══ 7) context injection (agent/pre-step) ───────────────────────────────────
 console.log('── 7) context injection (agent/pre-step) ──')
+// Use a DISTINCT session id here: /context excludes the calling session, and the
+// isolated dsh-smoke bucket only contains section-6's SESSION_ID — so this session
+// must not equal it or the project window would come back empty.
+const ctxSession = { id: 'dsh-bridge-smoke-ctx-' + Date.now(), header: { cwd: SMOKE_CWD, createdAt: Date.now() } }
 const ctxC = makeCtx(toolsRegistry)
 await apply(ctxC, Config['~standard'].validate({ injectContext: true, injectSemantic: false }).value)
-await ctxC.listeners['session/created'](session)
+// Seed a summary for section-6's SESSION_ID (the prior dsh-smoke session) so the
+// /context window for ctxSession is guaranteed non-empty — raw observations are not
+// compressed without an LLM key and carry no title/importance, so they don't feed /context.
+try {
+  await import('node:child_process').then(({ execFileSync: ex }) => {
+    const trig = (fn, payload) => JSON.parse(ex('iii', ['trigger', fn, '--json', JSON.stringify(payload), '--port', '49134', '--timeout-ms', '20000'], { encoding: 'utf8' }) || 'null')
+    trig('state::set', { scope: 'mem:summaries', key: SESSION_ID, value: { sessionId: SESSION_ID, project: SMOKE_PROJECT, createdAt: new Date().toISOString(), title: 'DSH smoke prior session', narrative: 'Seeded deterministic summary for the pre-step injection check.', keyDecisions: ['k1'], filesModified: [], concepts: ['dsh-smoke'], observationCount: 5 } })
+  })
+} catch (e) { console.log('  (seed) could not seed summary via `iii` CLI (' + e.message + ')') }
+await ctxC.listeners['session/created'](ctxSession)
 await new Promise((r) => setTimeout(r, 1200))
 const preStepListener = ctxC.listeners['agent/pre-step']
 check('pre-step listener registered', typeof preStepListener === 'function')
 const baseDecision = { kind: 'enter', messages: [{ id: 'm0', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }] }
 const injected = await preStepListener(
-  { agent: { session }, turn: 1, step: 1, signal: new AbortController().signal },
+  { agent: { session: ctxSession }, turn: 1, step: 1, signal: new AbortController().signal },
   async () => baseDecision,
 )
 check('pre-step returns enter', injected && injected.kind === 'enter')
@@ -203,8 +226,29 @@ check('appends exactly one injected message', Array.isArray(injected.messages) &
 const added = injected.messages[injected.messages.length - 1]
 check('injected message is user-role with text + plugin source',
   added.role === 'user' && Array.isArray(added.content) && added.content[0].type === 'text' && added.source && added.source.kind === 'plugin' && added.source.plugin === 'agentmemory' && added.source.form === 'recall')
-const rejected = await preStepListener({ agent: { session }, signal: new AbortController().signal }, async () => ({ kind: 'reject' }))
+const rejected = await preStepListener({ agent: { session: ctxSession }, signal: new AbortController().signal }, async () => ({ kind: 'reject' }))
 check('rejected decision passes through', rejected && rejected.kind === 'reject')
+
+// ── teardown: self-clean the test sessions from the live daemon ─────────────
+// Daemon REST has no session-delete endpoint, so we prune via the iii engine's
+// state::delete when the CLI is present. Otherwise the rows stay in the isolated
+// dsh-smoke project (never a real project) for cleanup-smoke-sessions.mjs.
+try {
+  await import('node:child_process').then(({ execFileSync: ex }) => {
+    const trig = (fn, payload) => JSON.parse(ex('iii', ['trigger', fn, '--json', JSON.stringify(payload), '--port', '49134', '--timeout-ms', '20000'], { encoding: 'utf8' }) || 'null')
+    const ids = [SESSION_ID, ctxSession.id]
+    let n = 0
+    for (const sid of ids) {
+      const obs = (trig('state::list', { scope: 'mem:obs:' + sid }) || []).map((o) => o.id)
+      for (const id of obs) { trig('state::delete', { scope: 'mem:obs:' + sid, key: id }); trig('state::delete', { scope: 'mem:emb:' + id, key: 'default' }); n++ }
+      trig('state::delete', { scope: 'mem:summaries', key: sid })
+      trig('state::delete', { scope: 'mem:sessions', key: sid })
+    }
+    console.log('  (teardown) removed ' + ids.length + ' smoke sessions: ' + n + ' obs + summaries + session rows')
+  })
+} catch (e) {
+  console.log('  (teardown) `iii` CLI not available — test data stays in project "' + SMOKE_PROJECT + '"; purge via scripts/cleanup-smoke-sessions.mjs (' + e.message + ')')
+}
 
 console.log(failures === 0 ? 'SMOKE PASS' : 'SMOKE FAIL (' + failures + ' failures)')
 process.exit(failures === 0 ? 0 : 1)
