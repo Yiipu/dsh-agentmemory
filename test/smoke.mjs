@@ -178,7 +178,8 @@ for (const e of [
   ev('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }], source: { kind: 'model', provider: 'deepseek', model: 'deepseek-v4' } } }),
   ev('approval/asked', { id: 'apr_1', toolName: 'bash', callId: 'call_1', reason: 'sandbox escape requested' }),
   ev('turn/end', { reason: { kind: 'completed' } }),
-  ev('compaction/summary', { compactionId: 'cpt_1', summary: 'Refactored the auth middleware to async verify and listed lib index.js.', shadowedSeqs: [1, 2], shadowedRange: { start: 1, end: 2 } }),
+  ev('compaction/summary', { compactionId: 'cpt_1', summary: [{ type: 'text', text: 'Refactored the auth middleware to async verify and listed lib index.js.' }], shadowedSeqs: [1, 2], shadowedRange: { start: 1, end: 2 } }),
+  ev('compaction/summary', { compactionId: 'cpt_legacy', summary: 'Legacy string compaction summary remains durable.', shadowedSeqs: [3, 4], shadowedRange: { start: 3, end: 4 } }),
   ev('todo/write', { todos: [{ content: 'x' }] }),
 ]) ctxA.listeners['session/event'](session, e);
 await ctxA.listeners['session/flush'](session)
@@ -212,6 +213,12 @@ const searchRes = await fetch(BASE + '/agentmemory/search', {
 })
 const searchBody = await searchRes.json()
 check('compaction/summary bridged into /remember', JSON.stringify(searchBody).includes('[dsh compaction]'))
+const legacySearchRes = await fetch(BASE + '/agentmemory/search', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ query: 'Legacy string compaction summary', project: SMOKE_CWD_PROJECT, limit: 10 }),
+})
+const legacySearchBody = await legacySearchRes.json()
+check('string compaction/summary remains bridged into /remember', JSON.stringify(legacySearchBody).includes('Legacy string compaction summary remains durable.'))
 
 // ══ 7) context injection (agent/pre-step) ───────────────────────────────────
 console.log('── 7) context injection (agent/pre-step) ──')
