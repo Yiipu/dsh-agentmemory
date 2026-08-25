@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * One-shot cleanup: remove dsh-bridge-smoke-* test sessions and their data from
- * the live agentmemory daemon so they stop polluting project="DSH" context.
+ * the live agentmemory daemon (leftovers from test/smoke.mjs runs, which write
+ * only to the isolated dsh-smoke-test / dsh-smoke test projects).
  *
  * Talks to the running iii engine over state::* (no daemon restart, no
  * state_store.db surgery). Dry-run by default; DRY_RUN=false performs deletes.

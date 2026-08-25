@@ -1,6 +1,6 @@
 # dsh-agentmemory
 
-> A [DSH](/deepseek-harness) (DeepSeek Harness) Cordis plugin that gives every dsh session a persistent, searchable memory in [agentmemory](https://github.com/rohitg00/agentmemory) — a local, self-hosted memory daemon with a REST API.
+> A DSH (DeepSeek Harness) Cordis plugin that gives every dsh session a persistent, searchable memory in [agentmemory](https://github.com/rohitg00/agentmemory) — a local, self-hosted memory daemon with a REST API.
 
 English | [中文](README.zh.md)
 
@@ -28,7 +28,7 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 
 (A local dev checkout also works via `dsh plugin --profile web add /path/to/checkout`.)
 
-Mount the row from [`cordis-row.example.yml`](cordis-row.example.yml) into a host composition `cordis.yml` (or into a per-session agent preset's composition under `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`). The minimal row is just `{name}` — Cordis validates it against the plugin's `Config` schema and fills defaults (`@` begins a YAML reserved scalar, so the package name must be quoted):
+Mount the row from [`cordis-row.example.yml`](cordis-row.example.yml) into a host composition `cordis.yml` (or into a per-session agent preset's composition under `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`). The minimal row is just `{name}` — Cordis validates it against the plugin's `Config` schema and fills defaults (quote the name if it is a scoped package, i.e. starts with `@`, which YAML treats as a reserved scalar):
 
 ```yaml
 - insert:
@@ -43,28 +43,28 @@ Mount the row from [`cordis-row.example.yml`](cordis-row.example.yml) into a hos
 
 ## DSH event → agentmemory mapping registry
 
-This table is the authoritative registry of what the bridge sends to the daemon. Every observation uses an agentmemory **standard hookType** — the daemon's `mem::observe` extracts searchable fields (`prompt`, `tool_name`, `tool_input`, `tool_output`) only for `prompt_submit` / `post_tool_use` / `post_tool_failure`; anything else keeps data in `raw.raw` and never reaches the synthetic narrative (title + toolInput/output/prompt) that search and compression read. Custom hookTypes are therefore only used where the daemon already understands them.
+This table is the authoritative registry of what the bridge sends to the daemon. Every observation uses an agentmemory **standard hookType** — the daemon's `mem::observe` extracts searchable fields (`prompt`, `tool_name`, `tool_input`, `tool_output`) only for `prompt_submit` / `post_tool_use` / `post_tool_failure`; anything else keeps data in `raw.raw` and never reaches the synthetic narrative (title + toolInput/output/prompt) that search and compression read. The plugin therefore emits no custom hookTypes — every row lands in a bucket the daemon already knows.
 
 | DSH event | agentmemory call | hookType | `data` fields | dedup discriminator |
 | --- | --- | --- | --- | --- |
-| `session/created` | `POST /agentmemory/session/start` | — | `sessionId`, `project`, `cwd`, `agentId`; the response's `context` is cached for injection | — |
-| `user/message` | `observe` | `prompt_submit` | `prompt=content`, `source` | `tool_input=content` (identical prompts merge naturally) |
-| `assistant/message` | `observe` | `post_tool_use` | `tool_name='assistant_message'`, `tool_output=content`, `provider`, `model` | `tool_input='#'+seq` (unique; content not in input) |
+| `session/created` | `POST /agentmemory/session/start` (when `enableSessionStartEnd`) | — | `sessionId`, `project`, `cwd`, `agentId`; the response's `context` is cached for injection | — |
+| `user/message` | `observe` | `prompt_submit` | `prompt=content`, `source` (plus a raw `content`) | `tool_input=content` (identical prompts merge naturally) |
+| `assistant/message` | `observe` | `post_tool_use` | `tool_name='assistant_message'`, `tool_output=content`, `provider`, `model` (plus a raw `content`) | `tool_input='#'+seq` (unique; content not in input) |
 | `tool/call` | **no observation row** (see below) | — | — | — |
-| `tool/result` (ok) | `observe` | `post_tool_use` | `tool_name`/`tool_input`/`tool_output` from the `callMeta` stash (falls back to event fields) | `tool_input=args` |
-| `tool/result` (err) | `observe` | `post_tool_failure` | same + `error`, `errorName` | `tool_input=args` |
+| `tool/result` (ok) | `observe` | `post_tool_use` | `tool_name`/`tool_input`/`tool_output` from the `callMeta` stash (falls back to event fields), plus `callId` and raw `content` | `tool_input=args` |
+| `tool/result` (err) | `observe` | `post_tool_failure` | same, plus `isError: true` and `errorName` | `tool_input=args` |
 | `turn/end` | `observe` | `post_tool_use` | `tool_name='turn_end'`, `tool_output=reason` (e.g. `completed`) | `tool_input='turn#'+seq` (unique) |
 | `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`, `request_id`, `call_id`, `reason` | no `tool_input`: the dedup hash covers the whole `data`, whose unique request id keeps distinct prompts apart |
-| `compaction/start` | `POST /agentmemory/context` refresh + re-inject flag | — | — | — |
+| `compaction/start` | `POST /agentmemory/context` refresh + re-inject flag (when `injectContext` + `injectContextOnCompaction`) | — | — | — |
 | `compaction/summary` | `POST /agentmemory/remember` (when `compactionBridge`) | — | `content='[dsh compaction] '+summary`, `type='fact'`, `concepts=['compaction']` | — |
 | `session/flush` | flush the buffered observations | — | — | — |
-| `session/disposed` | final flush + `POST /agentmemory/session/end` | — | — | — |
+| `session/disposed` | final flush; `POST /agentmemory/session/end` (when `enableSessionStartEnd`) | — | — | — |
 
 Events not listed (boundaries, chunks, todo/write, request/*) are log-only noise and emit nothing.
 
 ### Why `tool/call` emits no observation row
 
-The `tool/result` row already carries name + args (via `callMeta`, stashed when the call event passes through) plus the output as one standard `post_tool_use`. A separate call row would either sit in the extraction blind spot (custom hookType → empty narrative, unsearchable) or collide with the result row's dedup key (same `tool_name` + args) and silently drop the result's output. So the call is recorded, but only as metadata for the result row.
+The `tool/result` row already carries name + args (via `callMeta`, stashed when the call event passes through) plus the output as one standard `post_tool_use`. A separate call row would either fall outside the fields the daemon extracts (custom hookType → empty narrative, unsearchable) or collide with the result row's dedup key (same `tool_name` + args) and silently drop the result's output. So the call is recorded, but only as metadata for the result row.
 
 ### Why `turn/end` borrows `post_tool_use`
 
@@ -84,7 +84,7 @@ agentmemory's `mem::observe` drops duplicates by `sha256(sessionId, tool_name||h
 
 ## Memory injection (read side)
 
-The bridge uses DSH's native **`agent/pre-step`** injection channel (the same pattern as `dsh-time-context`) and appends sourced `user/message` rows to the tail of the incoming message batch. Both routes deduplicate at the event level — they do **not** re-inject on every tool step. The front end renders each injection as an independent "context injection" block (`ContextMessageNode`).
+The bridge uses DSH's native **`agent/pre-step`** injection channel (the same pattern as the harness's built-in `dsh-time-context` plugin) and appends sourced `user/message` rows to the tail of the incoming message batch. Both routes deduplicate at the event level — they do **not** re-inject on every tool step. The front end renders each injection as an independent "context injection" block (`ContextMessageNode`).
 
 ### Route 1 — Project recall (`form: 'recall'`, on by default)
 
@@ -109,7 +109,7 @@ Tools are defined with `defineTool` and registered through `ctx.tools.register`,
 
 ## Configuration keys
 
-`baseUrl`, `secret` (below), `enabled` (bridge master switch), `enableTools`, `enableSessionStartEnd`, `compactionBridge` (persist compaction summaries via `/remember`, default `true`), `agentId` (identity stamped on written rows, default `"dsh"`), `curlTimeoutMs`, `observeBatchLimit`, `maxContentChars`, `maxArgsChars`,
+`baseUrl`, `secret` (below), `enabled` (lifecycle-bridge master switch: when false, no observations, session rows, or injection data sources — model tools stay live), `enableTools`, `enableSessionStartEnd` (mirror `session/start` and `session/end` rows), `compactionBridge` (persist compaction summaries via `/remember`, default `true`), `agentId` (identity stamped on written rows, default `"dsh"`), `curlTimeoutMs`, `observeBatchLimit`, `maxContentChars`, `maxArgsChars`,
 `injectContext` (project recall switch, default `true`), `injectContextMaxChars` (default `6000`), `injectContextOnCompaction` (pre-compaction re-inject, default `true`),
 `injectSemantic` (semantic recall switch, default `false`), `injectSemanticMaxResults` (default `8`), `injectSemanticMaxChars` (default `3000`).
 
@@ -117,7 +117,7 @@ Keys omitted from a row are filled with defaults by Cordis according to the plug
 
 ### `secret`: plaintext or an environment-variable reference
 
-`secret` accepts two forms; whether you write plaintext is your choice:
+`secret` accepts two forms — plaintext or an environment-variable reference (the latter with three variants); whether you write plaintext is your choice:
 
 | Form | Behavior |
 | --- | --- |
@@ -156,7 +156,7 @@ For local development — peer-dependency linking, smoke-fixture cleanup, the ES
 
 ## Known limitations
 
+- **Tool-side vs bridge-side project resolution**: the observation bridge resolves the project as `AGENTMEMORY_PROJECT_NAME` env → git toplevel → cwd basename, but `memory_recall` / `memory_remember` default to the session cwd basename only. When the session cwd is a subdirectory of a git repo, observations land under the toplevel project name while the tools query the cwd basename — pass `project` explicitly to bridge the gap.
 - **Memory is shared across sessions by default** (observations are stamped with the plugin agentId, not the DSH session id); to isolate one agent, set `agentId` or filter `memory_recall` by it.
-- **Agent isolation is opt-in**: written rows carry the plugin agentId (env `AGENT_ID` → config `agentId` → default `"dsh"`); historical rows written before this existed have `agentId` undefined and stay recallable when the filter is omitted.
-- **Project resolution order**: `AGENTMEMORY_PROJECT_NAME` env var → git toplevel basename → cwd basename.
+- **Agent isolation is opt-in**: written rows carry the plugin agentId (env `AGENT_ID` → config `agentId` → default `"dsh"`); rows written by plugin versions that predate agentId stamping have `agentId` undefined and stay recallable when the filter is omitted.
 - **The bridge does not modify any `@deepseek-ai` package** and does not touch the shipped preset install directory.

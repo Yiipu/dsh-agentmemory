@@ -1,6 +1,6 @@
 # dsh-agentmemory
 
-> 一个 [DSH](/deepseek-harness)（DeepSeek Harness）的 Cordis 插件，让每个 dsh 会话都拥有 [agentmemory](https://github.com/rohitg00/agentmemory) —— 一个本地自托管、带 REST API 的记忆守护进程 —— 中的持久、可搜索记忆。
+> 一个 DSH（DeepSeek Harness）的 Cordis 插件，让每个 dsh 会话都拥有 [agentmemory](https://github.com/rohitg00/agentmemory) —— 一个本地自托管、带 REST API 的记忆守护进程 —— 中的持久、可搜索记忆。
 
 [English](README.md) | 中文
 
@@ -10,11 +10,11 @@ dsh 会话是短暂的：会话一结束，agent 学到的一切——做过的�
 
 | 面 | 做什么 |
 | --- | --- |
-| **写**（观察桥） | 把每个 DSH 会话事件映射为 agentmemory **标准 hookType**，让 daemon 的压缩管线、搜索索引、viewer 都能读到真实内容——见[映射注册表](#dsh事件--agentmemory-映射注册表) |
+| **写**（观察桥） | 把每个 DSH 会话事件映射为 agentmemory **标准 hookType**，让 daemon 的压缩管线、搜索索引、viewer 都能读到真实内容——见[映射注册表](#dsh-事件--agentmemory-映射注册表) |
 | **读**（上下文注入） | 经 `agent/pre-step` waterfall 追加 sourced `user/message`：每会话一次的项目 recall 窗口、可选的逐消息语义 recall、压缩前的补注入 |
 | **Agent 工具** | `memory_recall` / `memory_remember`，注册为模型工具，用于显式精确召回与主动写入 |
 
-> **agentmemory 是硬依赖。** 插件在加载时、注册任何能力（工具、监听器）之前就先检查 `<baseUrl>/agentmemory/livez`。如果守护进程不可达或未报告 `status: ok`，插件会**响亮地加载失败**——绝不静默降级。
+> **agentmemory 是硬依赖。** 插件在加载时、注册任何能力（工具、监听器）之前就先检查 `<baseUrl>/agentmemory/livez`。如果守护进程不可达或未报告 `status: ok`，插件会**加载失败并抛出明确错误**——绝不静默降级。
 
 所有配置都来自插件在 `cordis.yml` 里的那一行——编辑该行的 `config`（或承载它的文件）就是改配置。没有浏览器 UI，也没有持久化的配置文件。
 
@@ -28,7 +28,7 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 
 （本地 dev 检出也可用：`dsh plugin --profile web add /path/to/checkout`。）
 
-把 [`cordis-row.example.yml`](cordis-row.example.yml) 里的行挂进 host 组合 `cordis.yml`（或 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 下的每会话 preset 组合）。最小行就是 `{name}`——Cordis 按插件的 `Config` schema 校验并填默认值（`@` 是 YAML 保留标量起始，包名必须加引号）：
+把 [`cordis-row.example.yml`](cordis-row.example.yml) 里的行挂进 host 组合 `cordis.yml`（或 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 下的每会话 preset 组合）。最小行就是 `{name}`——Cordis 按插件的 `Config` schema 校验并填默认值（scoped 包名以 `@` 开头时需加引号，因为 `@` 是 YAML 保留标量起始）：
 
 ```yaml
 - insert:
@@ -39,32 +39,32 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
         enabled: true
 ```
 
-> 需要 Node >= 20 和一个 `shell` 能力缝（标准 bash/pwsh 执行器）。校验命令见[验证](#验证)。
+> 需要 Node >= 20 和一个 `shell` 能力接缝（capability seam，标准 bash/pwsh 执行器）。校验命令见[验证](#验证)。
 
-## DSH事件 → agentmemory 映射注册表
+## DSH 事件 → agentmemory 映射注册表
 
-这张表是桥接向 daemon 发送内容的权威注册表。每条观察都使用 agentmemory 的**标准 hookType**——daemon 的 `mem::observe` 只对 `prompt_submit` / `post_tool_use` / `post_tool_failure` 提取可搜索字段（`prompt`、`tool_name`、`tool_input`、`tool_output`）；其他 hookType 的数据留在 `raw.raw`，永远进不了搜索与压缩读取的合成 narrative（title + toolInput/output/prompt）。因此自定义 hookType 只在 daemon 本就认识的地方使用。
+这张表是桥接向 daemon 发送内容的权威注册表。每条观察都使用 agentmemory 的**标准 hookType**——daemon 的 `mem::observe` 只对 `prompt_submit` / `post_tool_use` / `post_tool_failure` 提取可搜索字段（`prompt`、`tool_name`、`tool_input`、`tool_output`）；其他 hookType 的数据留在 `raw.raw`，永远进不了搜索与压缩读取的合成 narrative（title + toolInput/output/prompt）。因此本插件不使用任何自定义 hookType——每条记录都落在 daemon 本就认识的桶里。
 
 | DSH 事件 | agentmemory 调用 | hookType | `data` 字段 | dedup 判别 |
 | --- | --- | --- | --- | --- |
-| `session/created` | `POST /agentmemory/session/start` | — | `sessionId`、`project`、`cwd`、`agentId`；响应中的 `context` 被缓存用于注入 | — |
-| `user/message` | `observe` | `prompt_submit` | `prompt=content`、`source` | `tool_input=content`（同 prompt 自然合并） |
-| `assistant/message` | `observe` | `post_tool_use` | `tool_name='assistant_message'`、`tool_output=content`、`provider`、`model` | `tool_input='#'+seq`（唯一；内容不进 input） |
+| `session/created` | `POST /agentmemory/session/start`（`enableSessionStartEnd` 开启时） | — | `sessionId`、`project`、`cwd`、`agentId`；响应中的 `context` 被缓存用于注入 | — |
+| `user/message` | `observe` | `prompt_submit` | `prompt=content`、`source`（另含原始 `content`） | `tool_input=content`（同 prompt 自然合并） |
+| `assistant/message` | `observe` | `post_tool_use` | `tool_name='assistant_message'`、`tool_output=content`、`provider`、`model`（另含原始 `content`） | `tool_input='#'+seq`（唯一；内容不进 input） |
 | `tool/call` | **不发观察行**（见下） | — | — | — |
-| `tool/result`（ok） | `observe` | `post_tool_use` | 来自 `callMeta` stash 的 `tool_name`/`tool_input`/`tool_output`（事件字段兜底） | `tool_input=args` |
-| `tool/result`（err） | `observe` | `post_tool_failure` | 同上 + `error`、`errorName` | `tool_input=args` |
+| `tool/result`（ok） | `observe` | `post_tool_use` | 来自 `callMeta` stash 的 `tool_name`/`tool_input`/`tool_output`（事件字段兜底），另含 `callId` 与原始 `content` | `tool_input=args` |
+| `tool/result`（err） | `observe` | `post_tool_failure` | 同上，另加 `isError: true` 与 `errorName` | `tool_input=args` |
 | `turn/end` | `observe` | `post_tool_use` | `tool_name='turn_end'`、`tool_output=reason`（如 `completed`） | `tool_input='turn#'+seq`（唯一） |
 | `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`、`request_id`、`call_id`、`reason` | 无 `tool_input`：dedup 哈希覆盖整个 `data`，其中唯一的 request id 区分不同审批 |
-| `compaction/start` | `POST /agentmemory/context` 刷新 + 补注入标记 | — | — | — |
+| `compaction/start` | `POST /agentmemory/context` 刷新 + 补注入标记（`injectContext` + `injectContextOnCompaction` 开启时） | — | — | — |
 | `compaction/summary` | `POST /agentmemory/remember`（`compactionBridge` 开启时） | — | `content='[dsh compaction] '+summary`、`type='fact'`、`concepts=['compaction']` | — |
 | `session/flush` | 缓冲观察落库 | — | — | — |
-| `session/disposed` | 最终 flush + `POST /agentmemory/session/end` | — | — | — |
+| `session/disposed` | 最终 flush；`POST /agentmemory/session/end`（`enableSessionStartEnd` 开启时） | — | — | — |
 
 未列出的事件（boundaries、chunks、todo/write、request/*）是纯日志噪音，不产生任何输出。
 
 ### 为什么 `tool/call` 不发观察行
 
-`tool/result` 行已经携带 name + args（经 `callMeta`，在 call 事件经过时 stash）加上输出，合成一条标准 `post_tool_use`。单独的 call 行要么落在提取盲区（自定义 hookType → 空 narrative、不可搜索），要么与结果行撞 dedup key（相同 `tool_name` + args）导致结果行的输出被静默丢弃。所以 call 被记录，但只作为结果行的元数据。
+`tool/result` 行已经携带 name + args（经 `callMeta`，在 call 事件经过时 stash）加上输出，合成一条标准 `post_tool_use`。单独的 call 行要么落在 daemon 提取的字段范围之外（自定义 hookType → 空 narrative、不可搜索），要么与结果行撞 dedup key（相同 `tool_name` + args）导致结果行的输出被静默丢弃。所以 call 被记录，但只作为结果行的元数据。
 
 ### 为什么 `turn/end` 借壳 `post_tool_use`
 
@@ -84,13 +84,13 @@ agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_
 
 ## 记忆注入（读侧）
 
-桥接走 DSH 原生的 **`agent/pre-step`** 注入通道（与 `dsh-time-context` 同一范式），把 sourced `user/message` append 到进入 step 的消息批次尾部。两条路线都做事件级去重，**不在每个 tool step 重复注入**。前端把每次注入渲染为独立的「上下文注入」块（`ContextMessageNode`）。
+桥接走 DSH 原生的 **`agent/pre-step`** 注入通道（与 harness 内置的 `dsh-time-context` 插件同一范式），把 sourced `user/message` append 到进入 step 的消息批次尾部。两条路线都做事件级去重，**不在每个 tool step 重复注入**。前端把每次注入渲染为独立的「上下文注入」块（`ContextMessageNode`）。
 
 ### 路线 1 —— 项目 recall（`form: 'recall'`，默认开）
 
 每会话把 agentmemory 的 **`/context` 项目级跨会话窗口**（「这个项目之前干过啥」，排除当前会话）注入**一次**。`session/created` → `/session/start` 从响应缓存 `context`；`agent/pre-step` 的首个有缓存的 step append 一次（`injectedContext` 去重）；每条 `user/message` 仍异步刷新缓存。
 
-### 路线 2 —— 自动语义 recall（`form: 'semantic'`，默认关）
+### 路线 2 —— 语义 recall（`form: 'semantic'`，默认关）
 
 每条 `user/message` 用原文做一次 `/smart-search`（BM25+向量+图），把召回记忆的**标题**组装成一条注入消息（`semanticSeq` 逐消息去重）。精确召回（`/search`）仍留给 agent 显式调用 `memory_recall` 工具。
 
@@ -109,24 +109,24 @@ agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_
 
 ## 配置键
 
-`baseUrl`、`secret`（见下）、`enabled`（桥接总开关）、`enableTools`、`enableSessionStartEnd`、`compactionBridge`（经 `/remember` 持久化压缩摘要，默认 `true`）、`agentId`（写入行的身份标识，默认 `"dsh"`）、`curlTimeoutMs`、`observeBatchLimit`、`maxContentChars`、`maxArgsChars`、
+`baseUrl`、`secret`（见下）、`enabled`（生命周期桥总开关：false 时不再产生观察、session 行与注入数据源，模型工具仍可用）、`enableTools`、`enableSessionStartEnd`（镜像 `session/start` 与 `session/end` 行）、`compactionBridge`（经 `/remember` 持久化压缩摘要，默认 `true`）、`agentId`（写入行的身份标识，默认 `"dsh"`）、`curlTimeoutMs`、`observeBatchLimit`、`maxContentChars`、`maxArgsChars`、
 `injectContext`（项目 recall 开关，默认 `true`）、`injectContextMaxChars`（默认 `6000`）、`injectContextOnCompaction`（压缩前补注入，默认 `true`）、
-`injectSemantic`（自动语义 recall 开关，默认 `false`）、`injectSemanticMaxResults`（默认 `8`）、`injectSemanticMaxChars`（默认 `3000`）。
+`injectSemantic`（语义 recall 开关，默认 `false`）、`injectSemanticMaxResults`（默认 `8`）、`injectSemanticMaxChars`（默认 `3000`）。
 
 行里省略的键由 Cordis 按插件的 `Config` schema 填默认值——**不要手写合并逻辑**。Cordis 原生校验：非法值（例如 `curlTimeoutMs: -5`）会让插件**加载失败**并给出明确错误。每个键的完整数值边界（min/max）声明在 `index.js` 里。
 
 ### secret：明文或环境变量引用
 
-`secret` 支持两种形式，写不写明文由你决定：
+`secret` 支持两种形式——明文或环境变量引用（后者有三种变体），写不写明文由你决定：
 
 | 形式 | 行为 |
 | --- | --- |
 | `secret: "xxx"` | 明文，原样用作 Bearer token |
-| `secret: '${AGENTMEMORY_SECRET}'` | 读环境变量；未定义 → 加载失败（响亮） |
+| `secret: '${AGENTMEMORY_SECRET}'` | 读环境变量；未定义 → 加载失败并报错 |
 | `secret: '${AGENTMEMORY_SECRET:default}'` | 读环境变量；未定义 → 用 `default` |
 | `secret: '${AGENTMEMORY_SECRET:?goes nowhere}'` | 读环境变量；未定义 → 报错 `goes nowhere` |
 
-环境变量经 `shell` 缝在 `apply()` 开始时解析（沙箱无直接 env 访问）。
+环境变量经 `shell` 能力接缝在 `apply()` 开始时解析（沙箱无直接 env 访问）。
 
 ## 模型体验
 
@@ -138,7 +138,7 @@ agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_
 
 ## 传输与失败语义
 
-- 沙箱无 `fetch`/require/timers；出网走 `shell` 能力缝，每次调用一个 curl，JSON body 走 stdin（`--data-binary @-`）。
+- 沙箱无 `fetch`/require/timers；出网走 `shell` 能力接缝，每次调用一个 curl，JSON body 走 stdin（`--data-binary @-`）。
 - **绝不 veto 生命周期**：监听器全量 try/catch 防护；工具调用尊重 `AbortSignal`。
 - 基础设施失败重排队列、下一个 checkpoint 重试；payload 级失败记录后丢弃。
 - flush 竞态：flush 在途时新事件经 `dirty` 标志被在途循环补发，不丢。
@@ -156,7 +156,7 @@ node test/smoke.mjs           # 端到端（需 daemon 在 :3111）
 
 ## 已知边界
 
+- **工具侧与桥接侧的 project 解析不一致**：观察桥按 `AGENTMEMORY_PROJECT_NAME` 环境变量 → git toplevel → cwd basename 解析 project，而 `memory_recall` / `memory_remember` 默认只取会话 cwd basename。当会话 cwd 位于 git 仓库子目录时，观察落在 toplevel 项目名下、工具却查 cwd basename——此时请显式传 `project`。
 - **记忆默认跨会话共享**（观察记录打的是插件 agentId，不是 DSH session id）；需要隔离某个 agent 时，设置 `agentId` 或让 `memory_recall` 按它过滤。
-- **Agent 隔离为可选**：写入记录都带插件 agentId（env `AGENT_ID` → config `agentId` → 默认 `"dsh"`）；历史早期记录的 `agentId` 为 undefined，不传过滤时仍可召回。
-- **project 解析顺序**：`AGENTMEMORY_PROJECT_NAME` 环境变量 → git toplevel basename → cwd basename。
-- **未改动任何 `@deepseek-ai` 包**；未改 shipped preset 安装目录。
+- **Agent 隔离为可选**：写入记录都带插件 agentId（env `AGENT_ID` → config `agentId` → 默认 `"dsh"`）；早于 agentId 标记功能的插件版本写入的记录 `agentId` 为 undefined，不传过滤时仍可召回。
+- **未改动任何 `@deepseek-ai` 包**；未改动随 dsh 发布的 preset 安装目录。

@@ -16,15 +16,17 @@
  *
  * Run:  node test/smoke.mjs   (agentmemory daemon on :3111)
  *
- * IMPORTANT: every run writes fixture data into the LIVE daemon under the
- * dedicated test project "dsh-smoke" (never project "DSH" or any real repo).
- * The test self-cleans its session when the `iii` CLI is on PATH (state::delete),
- * and prints a notice otherwise — leftover rows live only in the isolated
- * dsh-smoke bucket and are purged by scripts/cleanup-smoke-sessions.mjs.
+ * IMPORTANT: every run writes fixture data into the LIVE daemon under isolated
+ * test projects only — observations under "dsh-smoke-test" (the fake cwd's
+ * basename) and a seeded summary row under "dsh-smoke" (never project "DSH" or
+ * any real repo). The test self-cleans its session when the `iii` CLI is on
+ * PATH (state::delete), and prints a notice otherwise — leftover rows live
+ * only in those isolated test projects and are purged by
+ * scripts/cleanup-smoke-sessions.mjs.
  *
  * Requires the @deepseek-ai/* peer deps to be resolvable from this package.
  * In a pnpm profile they come from the harness install; for local runs use the
- * node_modules symlink set up in the repo (see README).
+ * node_modules symlink set up in the repo (see DEVELOPMENT.md).
  */
 import { spawn, execFileSync } from 'node:child_process'
 

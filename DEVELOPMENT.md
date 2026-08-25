@@ -10,7 +10,7 @@ Local-development notes for the dsh-agentmemory bridge. End-user documentation l
 
 ## Resolving peer dependencies
 
-The plugin imports `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-tools`. These are peer deps resolved by the dsh harness at runtime; this repo does not declare or install them. To run boot-check / smoke with plain Node from a checkout without installing the whole harness, link the harness's built-in packages in:
+The plugin imports `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-tools`. They are declared as `peerDependencies` but not installed by this repo — the dsh harness resolves them at runtime. To run boot-check / smoke with plain Node from a checkout without installing the whole harness, link the harness's built-in packages in:
 
 ```bash
 mkdir -p node_modules
@@ -30,21 +30,20 @@ The smoke test drives the static host plugin with a mock Cordis ctx whose `shell
 
 ## Smoke-test fixtures and cleanup
 
-Every smoke run writes fixture data into the **live daemon** under the dedicated test project `dsh-smoke` (session ids `dsh-bridge-smoke-*`; never project `DSH` or any real repo — the test's fake cwd is `/nonexistent/dsh-smoke-test` so project resolution is isolated). The test self-cleans its session when the `iii` CLI is on PATH:
+Every smoke run writes fixture data into the **live daemon** (never project `DSH` or any real repo — the test's fake cwd is `/nonexistent/dsh-smoke-test`, so project resolution is isolated): observations land under project `dsh-smoke-test` (the fake cwd's basename), and a seeded summary row uses project `dsh-smoke`. Session ids are `dsh-bridge-smoke-*`. The test self-cleans its session when the `iii` CLI is on PATH (`iii` is the agentmemory engine's admin CLI; 49134 is its default trigger port — adjust `--port` if your engine listens elsewhere):
 
 ```bash
-iii trigger --function-id state::delete \
-  --payload '{"scope":"mem:sessions","key":"<sessionId>"}' --port 49134
+iii trigger state::delete --json '{"scope":"mem:sessions","key":"<sessionId>"}' --port 49134
 ```
 
-and prints a notice otherwise. Leftover rows live only in the isolated `dsh-smoke` bucket and can be purged with:
+and prints a notice otherwise. Leftover rows live only in those isolated test projects and can be purged with:
 
 ```bash
 node scripts/cleanup-smoke-sessions.mjs            # dry run (default)
 DRY_RUN=false node scripts/cleanup-smoke-sessions.mjs   # actually delete
 ```
 
-When developing against a local agentmemory checkout (repo at `/tmp/agentmemory`, state under `/workspace/data/`), the same `state::delete` trigger with scopes `mem:sessions`, `mem:obs:<sessionId>`, or stream keys is the scalpel for removing probe rows by hand.
+When developing against a local agentmemory checkout, the same `state::delete` trigger with scopes `mem:sessions`, `mem:obs:<sessionId>`, or the stream keys removes individual rows by hand.
 
 ## HMR / loader cache
 
@@ -60,4 +59,4 @@ Host `index.js` edits take effect when the loader re-imports the plugin row — 
 | `cordis.patch.yml` | dsh bundle patch declaration (see `package.json` → `dsh.bundle.patch`) |
 | `scripts/boot-check.mjs` | Boot/CI readiness check (module + schema + daemon + peer deps, 7 checks) |
 | `scripts/cleanup-smoke-sessions.mjs` | One-shot purge of `dsh-bridge-smoke-*` session/obs rows from the live daemon (dry-run default; `DRY_RUN=false` to delete) |
-| `test/smoke.mjs` | End-to-end smoke test (writes to the isolated `dsh-smoke` project only) |
+| `test/smoke.mjs` | End-to-end smoke test (writes only to the isolated `dsh-smoke-test` / `dsh-smoke` test projects) |
