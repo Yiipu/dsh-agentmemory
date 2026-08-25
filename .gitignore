@@ -1,2 +1,4 @@
 node_modules/
 .DS_Store
+# Local agentmemory daemon state dumps (smoke/probe session data) — never publish
+data/

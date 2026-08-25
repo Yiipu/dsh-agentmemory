@@ -7,7 +7,8 @@
  *
  * Responsibilities:
  *   - mirror the DSH session lifecycle into agentmemory with standard hookTypes
- *     (compression-friendly, dedup-safe);
+ *     (compression-friendly, dedup-safe), plus approvals (notification) and
+ *     compaction summaries (durable /remember rows);
  *   - expose memory_recall / memory_remember model tools;
  *   - inject agentmemory context into the model request via the agent/pre-step
  *     waterfall (project recall once per session, optional semantic recall, and a
@@ -42,6 +43,8 @@ export const Config = Schema.object({
   enableTools: Schema.boolean().default(true),
   /** Mirror session/start and session/end rows. */
   enableSessionStartEnd: Schema.boolean().default(true),
+  /** Persist compaction/summary texts as durable memories via /remember. */
+  compactionBridge: Schema.boolean().default(true),
   /**
    * Agent identity stamped on every written row (session/observe/remember).
    * Resolution: env AGENT_ID (the daemon's own convention) → this value → 'dsh'.
@@ -154,13 +157,28 @@ async function resolveSecret(secret, getShell) {
 
 // ── event → observation mapping (dedup-safe) ────────────────────────────────
 // Maps each session event to standard agentmemory hookTypes so the daemon's
-// compression pipeline reads real content (mem::observe extracts compression
-// fields ONLY for these hookTypes; custom ones collapse to "only timestamp and hook").
+// compression pipeline reads real content. mem::observe extracts fields ONLY
+// for prompt_submit / post_tool_use / post_tool_failure (prompt, tool_name,
+// tool_input, tool_output); any other hookType keeps data in raw.raw and never
+// reaches the searchable synthetic narrative (title + toolInput/output/prompt).
 // Dedup safety: mem::observe drops duplicates by sha256(sessionId, tool_name||hookType,
 // tool_input[0..500]) with a 5-min TTL, so every stored observation needs a distinct
 // (tool_name, tool_input) in the window or it is silently lost. Per-observation unique
-// discriminators (`#'+seq`, callId, turn#seq) live in tool_input; natural dedup (identical
+// discriminators (`#'+seq, callId, turn#seq) live in tool_input; natural dedup (identical
 // prompts, identical (tool,args) results) is preserved.
+//
+// tool/call emits NO observation row: the tool/result row already carries
+// name+args (via callMeta) plus output as one standard post_tool_use. A separate
+// call row would either sit in the extraction blind spot (custom hookType with an
+// empty narrative) or collide with the result row's dedup key (same tool_name +
+// args) and silently drop the result's output.
+//
+// turn/end borrows post_tool_use purely so its reason reaches tool_output and
+// thus the synthetic narrative; assistant/message does the same for its content.
+// approval/asked maps to notification — the hookType Claude Code's Notification
+// hook and OpenCode's permission.updated produce. The daemon types it (inferType)
+// and renders it in the viewer, but by design does not content-index
+// notifications, so no field here needs extraction-friendly placement.
 function observationFor(event, st) {
   const cfg = st.cfg
   const d = event && event.data ? event.data : {}
@@ -177,7 +195,9 @@ function observationFor(event, st) {
       return { hookType: 'post_tool_use', data: { tool_name: 'assistant_message', tool_output: content, tool_input: '#' + seq, content, provider: str(m.source.provider), model: str(m.source.model) } }
     }
     case 'tool/call':
-      return { hookType: 'dsh_tool_call', data: { tool_name: 'dsh_call', tool_input: 'call#' + (capped(d.callId, 200) || String(seq)), name: capped(d.name, 200), arguments: capped(d.arguments, cfg.maxArgsChars), callId: capped(d.callId, 200) } }
+      // No observation row — see the mapping note above. (The callMeta stash in
+      // the session/event handler still records name+args for the result row.)
+      return null
     case 'tool/result': {
       const m = messagePayload(d)
       const callId = capped(d.callId || (m.source && m.source.callId), 200)
@@ -190,8 +210,22 @@ function observationFor(event, st) {
       if (!toolInput) toolInput = 'result#' + (callId || seq)
       return { hookType: isError ? 'post_tool_failure' : 'post_tool_use', data: { tool_name: toolName, tool_input: toolInput, tool_output: content, callId, content, isError, errorName } }
     }
-    case 'turn/end':
-      return { hookType: 'dsh_turn_end', data: { tool_name: 'dsh_turn_end', tool_input: 'turn#' + seq, reason: d.reason && typeof d.reason === 'object' ? str(d.reason.kind) : 'completed' } }
+    case 'turn/end': {
+      // Borrow post_tool_use so the reason reaches tool_output → synthetic
+      // narrative (a custom hookType would leave it unsearchable).
+      const reason = d.reason && typeof d.reason === 'object' ? str(d.reason.kind) : 'completed'
+      return { hookType: 'post_tool_use', data: { tool_name: 'turn_end', tool_input: 'turn#' + seq, tool_output: reason, reason } }
+    }
+    case 'approval/asked': {
+      // dsh appends { id, toolName, callId?, reason? } as a session event
+      // (dsh-user-approval). No tool_input: the dedup hash then covers the
+      // whole data object, whose unique request id keeps distinct prompts apart.
+      const data = { notification_type: 'permission_prompt' }
+      for (const pair of [['tool_name', capped(d.toolName, 200)], ['request_id', capped(d.id, 200)], ['call_id', capped(d.callId, 200)], ['reason', capped(d.reason, cfg.maxContentChars)]]) {
+        if (pair[1]) data[pair[0]] = pair[1]
+      }
+      return { hookType: 'notification', data }
+    }
     default:
       return null // boundaries, chunks, todo/write, request/* are log-only noise
   }
@@ -201,6 +235,19 @@ function observationFor(event, st) {
 function messagePayload(d) {
   const m = d.message && typeof d.message === 'object' ? d.message : d
   return { content: m.content, source: m.source && typeof m.source === 'object' ? m.source : (d.source && typeof d.source === 'object' ? d.source : {}) }
+}
+
+// dsh compaction/summary events carry the distilled text in data.summary
+// (dsh-compaction-basic commitCompactionBody); the rest of the payload is
+// provenance (ids, shadowed ranges, provider/model) that adds no recall value.
+const COMPACTION_SUMMARY_MAX_CHARS = 6000
+
+/** Extract the distilled summary text from a compaction/summary event. */
+function compactionSummaryOf(event, cap) {
+  const d = event && event.data ? event.data : {}
+  const s = typeof d.summary === 'string' ? d.summary : ''
+  if (!s.trim()) return ''
+  return s.length > cap ? s.slice(0, cap) : s
 }
 
 // ── the plugin ──────────────────────────────────────────────────────────────
@@ -325,6 +372,17 @@ export async function apply(ctx, config) {
         }
       } while (st.dirty && st.buffer.length)
     } finally { st.flushing = false }
+  }
+
+  /** Timestamp and buffer one observation; batch-flush at observeBatchLimit. */
+  function queueObservation(st, obs, time) {
+    obs.timestamp = iso(time || Date.now())
+    st.buffer.push(obs)
+    if (st.flushing) {
+      st.dirty = true
+    } else if (st.buffer.length >= cfg.observeBatchLimit) {
+      void flushSession(st).catch((err) => console.error('[agentmemory] batch flush failed: ' + err.message))
+    }
   }
 
   async function announceSession(st) {
@@ -488,19 +546,22 @@ export async function apply(ctx, config) {
       if (event.type === 'compaction/start' && cfg.injectContext && cfg.injectContextOnCompaction) {
         void refreshContext(st).then(() => { st.compactionInject = !!st.context }).catch(() => { /* best-effort */ })
       }
+      // Compaction bridge: the distilled summary is free, daemon-generated
+      // memory — persist it as a durable row so it survives the very history
+      // compression that produced it.
+      if (event.type === 'compaction/summary' && cfg.compactionBridge) {
+        const summary = compactionSummaryOf(event, COMPACTION_SUMMARY_MAX_CHARS)
+        if (summary) {
+          void postJson('/agentmemory/remember', { content: '[dsh compaction] ' + summary, type: 'fact', concepts: ['compaction'], project: st.project, agentId: cfg.agentId })
+            .catch((err) => console.error('[agentmemory] compaction bridge failed: ' + err.message))
+        }
+      }
       if (event.type === 'tool/call' && event.data && typeof event.data.callId === 'string') {
         if (st.callMeta.size >= 1000) { const oldest = st.callMeta.keys().next().value; if (oldest !== undefined) st.callMeta.delete(oldest) }
         st.callMeta.set(event.data.callId, { name: str(event.data.name), args: capped(event.data.arguments, cfg.maxArgsChars) })
       }
       const obs = observationFor(event, st)
-      if (!obs) return
-      obs.timestamp = iso(event.time || Date.now())
-      st.buffer.push(obs)
-      if (st.flushing) {
-        st.dirty = true
-      } else if (st.buffer.length >= cfg.observeBatchLimit) {
-        void flushSession(st).catch((err) => console.error('[agentmemory] batch flush failed: ' + err.message))
-      }
+      if (obs) queueObservation(st, obs, event.time)
     } catch (err) { console.error('[agentmemory] session/event handler failed: ' + err.message) }
   })
 

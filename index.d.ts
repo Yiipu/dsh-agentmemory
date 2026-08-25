@@ -20,6 +20,10 @@ export interface AgentmemoryConfig {
   enableTools?: boolean
   /** Mirror session/start and session/end rows. */
   enableSessionStartEnd?: boolean
+  /** Persist compaction/summary texts as durable memories via /remember. */
+  compactionBridge?: boolean
+  /** Agent identity stamped on every written row (env AGENT_ID overrides at load). */
+  agentId?: string
   /** Per-request curl deadline. */
   curlTimeoutMs?: number
   /** Flush a session buffer at this many buffered observations. */

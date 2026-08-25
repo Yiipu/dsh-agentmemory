@@ -17,6 +17,8 @@
     "scripts/",
     "test/",
     "README.md",
+    "README.zh.md",
+    "DEVELOPMENT.md",
     "cordis.patch.yml"
   ],
   "peerDependencies": {

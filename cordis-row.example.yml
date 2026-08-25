@@ -12,16 +12,17 @@
 #
 # Where to put it: the host composition cordis.yml (deployment config), or a
 # per-session agent preset under ${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/.
-# Rows are {id, name, config?} — see the cordis preset for the exact grammar.
+# Rows are {id, name, config?}.
 #
-# `name` must be a RESOLVABLE PACKAGE NAME (quoted, because '@' is a YAML
-# reserved scalar start). Install the package into your profile first:
-#   dsh plugin add --profile web /path/to/plugins/agentmemory
+# `name` must be a RESOLVABLE PACKAGE NAME. Quote it if it starts with `@`
+# (a scoped package) — '@' is a YAML reserved scalar start. Install the
+# package into your profile first:
+#   dsh plugin --profile web add /path/to/checkout
 # A pnpm link (file: dev checkout) works great for development.
 #
 # HMR / cache: host index.js edits take effect when the loader re-imports the
-# row — bump the name's version (e.g. dsh-agentmemory@0.4.0) once to
-# bust Node's ESM cache.
+# row — bump the name's version once (e.g. dsh-agentmemory@0.4.1 when the
+# current package version is 0.4.0) to bust Node's ESM cache.
 #
 # The daemon is a HARD dependency: the plugin checks livez on load and fails
 # loudly if it is unreachable, so start agentmemory (port 3111) first.
@@ -38,14 +39,18 @@
       name: "dsh-agentmemory"
       config:
         baseUrl: http://localhost:3111
-        secret: ""                     # Bearer token when AGENTMEMORY_SECRET is set.
-                                       # A bare string is used verbatim, or read from an env var:
+        secret: ""                     # empty = no Authorization header at all.
+                                       # To read the token from an env var, reference it here:
                                        #   ${AGENTMEMORY_SECRET}          unset → load fails
                                        #   ${AGENTMEMORY_SECRET:default}  unset → "default"
                                        #   ${AGENTMEMORY_SECRET:?goes nowhere}  unset → error "goes nowhere"
+                                       # (a bare string is used verbatim as the Bearer token)
         enabled: true                 # observation bridge master switch
         enableTools: true             # register memory_recall / memory_remember
         enableSessionStartEnd: true
+        compactionBridge: true        # persist compaction summaries via /remember
+        agentId: dsh                  # identity stamped on written rows
+                                       # (env AGENT_ID overrides this at load)
         curlTimeoutMs: 4000
         observeBatchLimit: 20
         maxContentChars: 4000

@@ -9,20 +9,24 @@
  *   3. memory_recall / memory_remember register through ctx.tools via defineTool.
  *   4. secret env-reference resolution: ${VAR} / ${VAR:default} / ${VAR:?error}.
  *   5. Liveness gate fails loudly when the daemon is unreachable.
- *   6. Session lifecycle → standard hookTypes stored in the real daemon.
+ *   6. Session lifecycle → observations in the real daemon (title/type/narrative
+ *      shape), approval → notification, turn/end reason searchable, and the
+ *      compaction/summary → /remember bridge.
  *   7. agent/pre-step context injection shape.
  *
  * Run:  node test/smoke.mjs   (agentmemory daemon on :3111)
  *
- * IMPORTANT: every run writes fixture data into the LIVE daemon under the
- * dedicated test project "dsh-smoke" (never project "DSH" or any real repo).
- * The test self-cleans its session when the `iii` CLI is on PATH (state::delete),
- * and prints a notice otherwise — leftover rows live only in the isolated
- * dsh-smoke bucket and are purged by scripts/cleanup-smoke-sessions.mjs.
+ * IMPORTANT: every run writes fixture data into the LIVE daemon under isolated
+ * test projects only — observations under "dsh-smoke-test" (the fake cwd's
+ * basename) and a seeded summary row under "dsh-smoke" (never project "DSH" or
+ * any real repo). The test self-cleans its session when the `iii` CLI is on
+ * PATH (state::delete), and prints a notice otherwise — leftover rows live
+ * only in those isolated test projects and are purged by
+ * scripts/cleanup-smoke-sessions.mjs.
  *
  * Requires the @deepseek-ai/* peer deps to be resolvable from this package.
  * In a pnpm profile they come from the harness install; for local runs use the
- * node_modules symlink set up in the repo (see README).
+ * node_modules symlink set up in the repo (see DEVELOPMENT.md).
  */
 import { spawn, execFileSync } from 'node:child_process'
 
@@ -68,8 +72,6 @@ function makeCtx(tools) {
 const session = { id: SESSION_ID, header: { cwd: SMOKE_CWD, createdAt: Date.now() } }
 const ev = (type, data) => ({ type, seq: 0, time: Date.now(), data })
 const execCtx = { agent: { session }, signal: new AbortController().signal }
-
-const expectHookTypes = new Set(['prompt_submit', 'post_tool_use', 'dsh_tool_call', 'dsh_turn_end'])
 
 async function fetchJson(path) {
   const res = await fetch(BASE + path)
@@ -174,7 +176,9 @@ for (const e of [
   ev('tool/call', { callId: 'call_1', name: 'bash', arguments: '{"command":"ls"}' }),
   ev('tool/result', { message: { source: { kind: 'tool', callId: 'call_1' }, content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'lib index.js' }] }] } }),
   ev('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }], source: { kind: 'model', provider: 'deepseek', model: 'deepseek-v4' } } }),
+  ev('approval/asked', { id: 'apr_1', toolName: 'bash', callId: 'call_1', reason: 'sandbox escape requested' }),
   ev('turn/end', { reason: { kind: 'completed' } }),
+  ev('compaction/summary', { compactionId: 'cpt_1', summary: 'Refactored the auth middleware to async verify and listed lib index.js.', shadowedSeqs: [1, 2], shadowedRange: { start: 1, end: 2 } }),
   ev('todo/write', { todos: [{ content: 'x' }] }),
 ]) ctxA.listeners['session/event'](session, e);
 await ctxA.listeners['session/flush'](session)
@@ -183,17 +187,31 @@ await new Promise((r) => setTimeout(r, 900))
 
 const obsBody = await fetchJson('/agentmemory/observations?sessionId=' + encodeURIComponent(SESSION_ID))
 const stored = obsBody.observations ?? []
-const storedHookTypes = stored.map((o) => o.hookType).sort()
-check('all standard hookTypes stored', [...expectHookTypes].every((h) => storedHookTypes.includes(h)), 'stored=' + JSON.stringify(storedHookTypes))
 const storedText = JSON.stringify(stored)
-check('tool/result content extracted', storedText.includes('lib index.js'))
-check('assistant message content extracted', storedText.includes('Done.'))
-const callCount = storedHookTypes.filter((h) => h === 'dsh_tool_call').length
-const resultCount = storedHookTypes.filter((h) => h === 'post_tool_use').length
-check('tool/call and its result both survive (no cross-dedup collapse)', callCount === 1 && resultCount >= 2, 'call=' + callCount + ' result=' + resultCount)
+const titles = stored.map((o) => o.title).sort()
+check('user prompt stored (prompt_submit row)', titles.includes('prompt_submit'))
+check('tool/result stored with the real tool name from callMeta', titles.includes('bash'))
+check('tool/call emits no phantom observation row', !titles.includes('dsh_call') && !titles.includes('dsh_tool_call'), 'titles=' + JSON.stringify(titles))
+check('tool/result content searchable in narrative', storedText.includes('lib index.js'))
+check('assistant message content searchable in narrative', storedText.includes('Done.'))
+check('approval/asked stored as a typed notification', stored.some((o) => o.type === 'notification'))
+const turnRow = stored.find((o) => o.title === 'turn_end')
+check('turn/end reason searchable in narrative', !!(turnRow && String(turnRow.narrative || '').includes('completed')))
 const sessBody = await fetchJson('/agentmemory/sessions?sessionId=' + encodeURIComponent(SESSION_ID))
 const sessRows = (sessBody.sessions ?? []).filter((s) => s.id === SESSION_ID)
 check('session row completed', sessRows.length === 1 && sessRows[0].status === 'completed')
+
+// Compaction bridge: the summary must exist as a durable memory, not an observation.
+// The session's project is basename(SMOKE_CWD) ('dsh-smoke-test' — the dir sits
+// outside any git repo, so resolveProject falls back to the cwd basename) and
+// mem::remember stamps the memory with that project; search with the same scope.
+const SMOKE_CWD_PROJECT = SMOKE_CWD.split('/').filter(Boolean).pop()
+const searchRes = await fetch(BASE + '/agentmemory/search', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ query: 'auth middleware compaction', project: SMOKE_CWD_PROJECT, limit: 10 }),
+})
+const searchBody = await searchRes.json()
+check('compaction/summary bridged into /remember', JSON.stringify(searchBody).includes('[dsh compaction]'))
 
 // ══ 7) context injection (agent/pre-step) ───────────────────────────────────
 console.log('── 7) context injection (agent/pre-step) ──')
