@@ -237,20 +237,18 @@ function messagePayload(d) {
   return { content: m.content, source: m.source && typeof m.source === 'object' ? m.source : (d.source && typeof d.source === 'object' ? d.source : {}) }
 }
 
-// dsh compaction/summary events carry the distilled text in data.summary as a
-// ContentBlock[] (per @deepseek-ai/dsh-compaction/types), so we dig the text
-// out of the block array via blockText; the rest of the payload is provenance
-// (ids, shadowed ranges, provider/model) that adds no recall value.
+// dsh compaction/summary events carry the distilled text in data.summary. New
+// runtimes use ContentBlock[] (per @deepseek-ai/dsh-compaction/types), while
+// older runtimes send the summary as a string. The rest of the payload is
+// provenance (ids, shadowed ranges, provider/model) that adds no recall value.
 const COMPACTION_SUMMARY_MAX_CHARS = 6000
 
 /** Extract the distilled summary text from a compaction/summary event. */
 function compactionSummaryOf(event, cap) {
   const d = event && event.data ? event.data : {}
-  // summary is ContentBlock[] in production events (not a string); blockText
-  // unwraps string/text blocks and applies the same cap.
-  const s = blockText(d.summary, cap)
+  const s = typeof d.summary === 'string' ? d.summary : blockText(d.summary, cap)
   if (!s.trim()) return ''
-  return s
+  return s.length > cap ? s.slice(0, cap) : s
 }
 
 // ── the plugin ──────────────────────────────────────────────────────────────
