@@ -178,7 +178,7 @@ for (const e of [
   ev('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }], source: { kind: 'model', provider: 'deepseek', model: 'deepseek-v4' } } }),
   ev('approval/asked', { id: 'apr_1', toolName: 'bash', callId: 'call_1', reason: 'sandbox escape requested' }),
   ev('turn/end', { reason: { kind: 'completed' } }),
-  ev('compaction/summary', { compactionId: 'cpt_1', summary: 'Refactored the auth middleware to async verify and listed lib index.js.', shadowedSeqs: [1, 2], shadowedRange: { start: 1, end: 2 } }),
+  ev('compaction/summary', { compactionId: 'cpt_1', summary: [{ type: 'text', text: 'Refactored the auth middleware to async verify and listed lib index.js.' }], shadowedSeqs: [1, 2], shadowedRange: { start: 1, end: 2 } }),
   ev('todo/write', { todos: [{ content: 'x' }] }),
 ]) ctxA.listeners['session/event'](session, e);
 await ctxA.listeners['session/flush'](session)
