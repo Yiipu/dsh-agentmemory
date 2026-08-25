@@ -46,6 +46,9 @@
         enabled: true                 # observation bridge master switch
         enableTools: true             # register memory_recall / memory_remember
         enableSessionStartEnd: true
+        compactionBridge: true        # persist compaction summaries via /remember
+        agentId: dsh                  # identity stamped on written rows
+                                       # (env AGENT_ID overrides this at load)
         curlTimeoutMs: 4000
         observeBatchLimit: 20
         maxContentChars: 4000
