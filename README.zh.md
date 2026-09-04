@@ -4,13 +4,13 @@
 
 [English](README.md) | 中文
 
-> **⚠️ 已废弃——最后一次更新。** 本插件不再维护，仓库将标记为 deprecated。agentmemory 0.9.29+ 自带官方 dsh 连接器，请迁移：
+> **⚠️ 已废弃。** 本插件不再维护。agentmemory 0.9.29+ 自带官方 dsh 连接器，请迁移：
 >
 > ```bash
 > agentmemory connect dsh --with-hooks
 > ```
 >
-> 官方连接器提供自动捕获（hook 经第一方 `dsh-hooks-claude-code` 桥接）与 MCP 记忆工具；本插件的 `agent/pre-step` 上下文注入暂无官方等价物。已写入的记忆与观察留在 daemon 中（按 project/agentId 组织），迁移后仍可查询——但官方连接器盖戳的 project/agentId 可能与本插件不同（本插件用 git toplevel 项目名、`dsh` agentId）。过渡期内每个 profile 二选一：daemon 去重无法合并两路捕获，同时开启会产生重复行。
+> 官方连接器提供自动捕获（hook 经第一方 `dsh-hooks-claude-code` 桥接）与 MCP 记忆工具；本插件的 `agent/pre-step` 上下文注入无官方等价物。已写入的记忆与观察留在 daemon 中（按 project/agentId 组织），迁移后仍可查询——但官方连接器写入的 project/agentId 可能与本插件不同（本插件用 git toplevel 项目名、`dsh` agentId）。过渡期内每个 profile 二选一：daemon 去重无法合并两路捕获，同时开启会产生重复行。
 
 dsh 会话是短暂的：会话一结束，agent 学到的一切——做过的工具调用、恢复过的错误、定下的决策——都随之消失。agentmemory 用跨会话、跨 harness 的持久化解决这一点（它已在服务 Claude Code、OpenCode、Hermes 等）。本插件就是 dsh 侧的那一环：把每个会话的活动**写入** daemon 成为观察记录，在恰当的时机把记忆**读回**模型，并向 agent 暴露显式的**记忆工具**。
 
@@ -31,10 +31,7 @@ dsh 会话是短暂的：会话一结束，agent 学到的一切——做过的�
 先把 agentmemory daemon 跑起来——插件的加载硬门要求它在线。daemon 默认 REST 端口为 `3111`；安装方式见 [agentmemory 快速上手](https://github.com/rohitg00/agentmemory#install)（`npx -y @agentmemory/agentmemory@latest`）。已在 agentmemory 0.9.29 上验证；要求 ≥ 0.9.29：
 
 > - 更早的 0.9.x 会在 `/agentmemory/remember` 上丢弃 `agentId`，agent 作用域的 recall 会因此漏掉所有已保存的记忆。
->
 > - 更早的 0.9.x 的 observe 去重会把不带 `tool_input` 的行（本插件的 approval → notification 行）折叠到同一把 key、5 分钟窗口内静默丢弃第二次审批。
->
-> 两者均在 0.9.29 修复。
 
 然后从 GitHub 把包装进 profile：
 
@@ -55,26 +52,26 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
         enabled: true
 ```
 
-> 需要 Node >= 20、一个 `shell` 能力接缝（capability seam，标准 bash/pwsh 执行器），以及与 [package.json](package.json) 中 `peerDependencies` 范围匹配的 dsh harness（已验证的版本波（wave）：dsh-tools 0.1.1-rc.2 与 0.1.2-rc.1）。行可接受的全部键见[配置键](#配置键)。校验命令见[验证](#验证)。
+> 需要 Node >= 20、一个 `shell` 能力接缝（capability seam，标准 bash/pwsh 执行器），以及与 [package.json](package.json) 中 `peerDependencies` 范围匹配的 dsh harness（已验证版本：dsh-tools 0.1.1-rc.2 与 0.1.2-rc.1）。行可接受的全部键见[配置键](#配置键)。校验命令见[验证](#验证)。
 
 ## DSH 事件 → agentmemory 映射注册表
 
 这张表是桥接向 daemon 发送内容的权威注册表。每条观察都使用 agentmemory 的**标准 hookType**：daemon 的 `mem::observe` 只对 `prompt_submit` / `post_tool_use` / `post_tool_failure` 提取可搜索字段（`prompt`、`tool_name`、`tool_input`、`tool_output`）；其他 hookType 的数据留在 `raw.raw`，永远进不了搜索与压缩读取的合成 narrative。因此本插件不使用任何自定义 hookType——每条记录都落在 daemon 本就认识的桶里。
 
-| DSH 事件               | agentmemory 调用                                                                                                       | hookType            | `data` 字段                                                                                                                                                                             | dedup 判别                                                                     |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `session/created`    | `POST /agentmemory/session/start`（`enableSessionStartEnd` 开启时）；否则在 `injectContext` 开启时直接 `POST /agentmemory/context` | —                   | `sessionId`、`project`、`cwd`、`agentId`；响应中的 `context` 被缓存用于注入                                                                                                                          | —                                                                            |
-| `user/message`       | `observe`                                                                                                            | `prompt_submit`     | `prompt=content`、`source`（另含原始 `content`）                                                                                                                                             | `tool_input=content`（同 prompt 自然合并）                                          |
-| `assistant/message`  | `observe`                                                                                                            | `post_tool_use`     | `tool_name='assistant_message'`、`tool_output=content`、`provider`、`model`（另含原始 `content`）                                                                                              | `tool_input='#'+seq`（唯一；内容不进 input）                                          |
-| `tool/call`          | **不发观察行**（见下）                                                                                                        | —                   | —                                                                                                                                                                                     | —                                                                            |
-| `tool/result`（ok）    | `observe`                                                                                                            | `post_tool_use`     | 来自 `callMeta` stash 的 `tool_name`/`tool_input`/`tool_output`（`tool_name` 兜底取事件的 `name`；`tool_input` 兜底为 `'result#'+callId`），另含 `callId`、原始 `content`、`isError: false`、`errorName: ''` | `tool_input=args`                                                            |
-| `tool/result`（err）   | `observe`                                                                                                            | `post_tool_failure` | 同上，但 `isError: true`、`errorName` 有值                                                                                                                                                   | `tool_input=args`                                                            |
-| `turn/end`           | `observe`                                                                                                            | `post_tool_use`     | `tool_name='turn_end'`、`tool_output=reason`（如 `completed`）                                                                                                                            | `tool_input='turn#'+seq`（唯一）                                                 |
-| `approval/asked`     | `observe`                                                                                                            | `notification`      | `notification_type='permission_prompt'` + `tool_name`、`request_id`、`call_id`、`reason`                                                                                                 | 无 `tool_input`：daemon ≥ 0.9.29 时 dedup 哈希覆盖整个 `data`，其中唯一的 request id 区分不同审批 |
-| `compaction/start`   | `POST /agentmemory/context` 刷新 + 补注入标记（`injectContext` + `injectContextOnCompaction` 开启时）                            | —                   | —                                                                                                                                                                                     | —                                                                            |
-| `compaction/summary` | `POST /agentmemory/remember`（`compactionBridge` 开启时）                                                                 | —                   | `content='[dsh compaction] '+summary`、`type='fact'`、`concepts=['compaction']`、`project`、`agentId`                                                                                     | —                                                                            |
-| `session/flush`      | 缓冲观察落库                                                                                                               | —                   | —                                                                                                                                                                                     | —                                                                            |
-| `session/disposed`   | 最终 flush；`POST /agentmemory/session/end`（`enableSessionStartEnd` 开启时）                                                | —                   | —                                                                                                                                                                                     | —                                                                            |
+| DSH 事件               | agentmemory 调用                                                                                                       | hookType            | `data` 字段                                                                                                                                                                             | dedup 判别                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `session/created`    | `POST /agentmemory/session/start`（`enableSessionStartEnd` 开启时）；否则在 `injectContext` 开启时直接 `POST /agentmemory/context` | —                   | `sessionId`、`project`、`cwd`、`agentId`；响应中的 `context` 被缓存用于注入                                                                                                                          | —                                                          |
+| `user/message`       | `observe`                                                                                                            | `prompt_submit`     | `prompt=content`、`source`（另含原始 `content`）                                                                                                                                             | `tool_input=content`（同 prompt 自然合并）                        |
+| `assistant/message`  | `observe`                                                                                                            | `post_tool_use`     | `tool_name='assistant_message'`、`tool_output=content`、`provider`、`model`（另含原始 `content`）                                                                                              | `tool_input='#'+seq`（唯一；内容不进 input）                        |
+| `tool/call`          | **不发观察行**（见下）                                                                                                        | —                   | —                                                                                                                                                                                     | —                                                          |
+| `tool/result`（ok）    | `observe`                                                                                                            | `post_tool_use`     | 来自 `callMeta` stash 的 `tool_name`/`tool_input`/`tool_output`（`tool_name` 兜底取事件的 `name`；`tool_input` 兜底为 `'result#'+callId`），另含 `callId`、原始 `content`、`isError: false`、`errorName: ''` | `tool_input=args`                                          |
+| `tool/result`（err）   | `observe`                                                                                                            | `post_tool_failure` | 同上，但 `isError: true`、`errorName` 有值                                                                                                                                                   | `tool_input=args`                                          |
+| `turn/end`           | `observe`                                                                                                            | `post_tool_use`     | `tool_name='turn_end'`、`tool_output=reason`（如 `completed`）                                                                                                                            | `tool_input='turn#'+seq`（唯一）                               |
+| `approval/asked`     | `observe`                                                                                                            | `notification`      | `notification_type='permission_prompt'` + `tool_name`、`request_id`、`call_id`、`reason`                                                                                                 | 无 `tool_input`：dedup 哈希覆盖整个 `data`，其中唯一的 request id 区分不同审批 |
+| `compaction/start`   | `POST /agentmemory/context` 刷新 + 补注入标记（`injectContext` + `injectContextOnCompaction` 开启时）                            | —                   | —                                                                                                                                                                                     | —                                                          |
+| `compaction/summary` | `POST /agentmemory/remember`（`compactionBridge` 开启时）                                                                 | —                   | `content='[dsh compaction] '+summary`、`type='fact'`、`concepts=['compaction']`、`project`、`agentId`                                                                                     | —                                                          |
+| `session/flush`      | 缓冲观察落库                                                                                                               | —                   | —                                                                                                                                                                                     | —                                                          |
+| `session/disposed`   | 最终 flush；`POST /agentmemory/session/end`（`enableSessionStartEnd` 开启时）                                                | —                   | —                                                                                                                                                                                     | —                                                          |
 
 未列出的事件（boundaries、chunks、todo/write、request/\*）是纯日志噪音，不产生任何输出。
 
@@ -96,7 +93,7 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 
 ### 去重安全设计（Dedup-safe）
 
-agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_input[0..500])` 做 5 分钟 TTL 去重，命中即整条丢弃。桥接用每会话单调 `seq` 与自然内容/`callId` 做 `tool_input` 判别，保证同类多条都落库，同时保留「相同 prompt / 相同 (tool,args) 结果」的自然合并。`tool_input` 缺失时 daemon（≥ 0.9.29）改为哈希整个 `data` 对象；更早的 0.9.x 会把这类行折叠到单一共享 key，窗口内的第二次审批会被静默丢弃。
+agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_input[0..500])` 做 5 分钟 TTL 去重，命中即整条丢弃。桥接用每会话单调 `seq` 与自然内容/`callId` 做 `tool_input` 判别，保证同类多条都落库，同时保留「相同 prompt / 相同 (tool,args) 结果」的自然合并。`tool_input` 缺失时 daemon 改为哈希整个 `data` 对象。
 
 ## 记忆注入（读侧）
 
@@ -171,13 +168,9 @@ agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_
 ## 传输与失败语义
 
 - 沙箱无 `fetch`/require/timers；出网走 `shell` 能力接缝，每次调用一个 curl，JSON body 走 stdin（`--data-binary @-`）。
-
 - **缓冲**：观察按会话缓冲，达到 `observeBatchLimit`（20）条、`session/flush` 或 `session/disposed` 时逐条落库；多个并发会话各自持有独立缓冲。
-
 - **绝不 veto 生命周期**：生命周期监听器有错误防护（观察发送失败在 flush 循环内被捕获）；工具调用尊重 `AbortSignal`。
-
 - 基础设施失败（curl 非零退出）重排队列、下一个 checkpoint 重试。daemon 返回的 HTTP 错误响应目前**不会**为观察行检查——这类行会被静默丢弃；一次性调用（压缩 / context / session 行）则记录后丢弃。
-
 - flush 竞态：flush 在途时新事件经 `dirty` 标志被在途循环补发，不丢。
 
 **日志。** 所有运行时错误都以 `[agentmemory]` 前缀写入 dsh 宿主进程的 stdout/stderr——如 `daemon unreachable at …`（加载门）、`secret env … is unset`（secret 解析）、`observe failed, re-queuing tail`（发送失败）、`session/start failed` / `context refresh failed`（一次性调用）。加载横幅（`[agentmemory] bridge active: …`）确认 `apply()` 成功。
@@ -196,15 +189,10 @@ node test/smoke.mjs           # 端到端（需 daemon 在 :3111）
 ## 已知边界
 
 - **工具侧与桥接侧的 project 解析不一致**：观察桥按 `AGENTMEMORY_PROJECT_NAME` 环境变量 → git toplevel → cwd basename 解析 project，而 `memory_recall` / `memory_remember` 默认只取会话 cwd basename。当会话 cwd 位于 git 仓库子目录时，观察落在 toplevel 项目名下、工具却查 cwd basename——此时请显式传 `project`。
-
 - **无只读模式**：`enabled: false` 同时切断观察桥与注入数据源（只有模型工具保持可用）。只注入上下文、不写观察目前做不到。
-
 - **记忆默认跨会话共享**（观察记录打的是插件 agentId，不是 DSH session id）；需要隔离某个 agent 时，设置 `agentId` 或让 `memory_recall` 按它过滤。
-
 - **Agent 隔离为可选**：写入记录都带插件 agentId（见[配置键](#配置键)）；早于 agentId 标记功能的插件版本写入的记录 `agentId` 为 undefined，不传过滤时仍可召回。
-
 - **环境变量**（`AGENT_ID`、`AGENTMEMORY_PROJECT_NAME`）经 `shell` seam 从 dsh 宿主进程环境读取——在启动 dsh 的地方设置，而不是写在 `cordis.yml` 里。
-
 - 未改动任何 `@deepseek-ai` 包；未改动随 dsh 发布的 preset 安装目录。
 
 ## 许可证

@@ -4,13 +4,13 @@
 
 English | [中文](README.zh.md)
 
-> **⚠️ Deprecated — final update.** This plugin is no longer maintained, and the repository will be marked deprecated. agentmemory 0.9.29+ ships an official dsh connector that supersedes it — migrate with:
+> **⚠️ Deprecated.** This plugin is no longer maintained. agentmemory 0.9.29+ ships an official dsh connector that supersedes it — migrate with:
 >
 > ```bash
 > agentmemory connect dsh --with-hooks
 > ```
 >
-> The official connector covers auto-capture (hooks bridged through the first-party `dsh-hooks-claude-code`) and the MCP memory tools; this plugin's `agent/pre-step` context injection has no official equivalent yet. Already-written memories and observations stay in the daemon (keyed by project/agentId) and remain queryable after migration — though the project/agentId the official connector stamps may differ from this plugin's (git-toplevel project, `dsh` agentId). While transitioning, pick one per profile: the daemon's dedup cannot merge the two capture streams, so running both duplicates rows.
+> The official connector covers auto-capture (hooks bridged through the first-party `dsh-hooks-claude-code`) and the MCP memory tools; this plugin's `agent/pre-step` context injection has no official equivalent. Already-written memories and observations stay in the daemon (keyed by project/agentId) and remain queryable after migration — though the project/agentId the official connector stamps may differ from this plugin's (git-toplevel project, `dsh` agentId). While transitioning, pick one per profile: the daemon's dedup cannot merge the two capture streams, so running both duplicates rows.
 
 dsh sessions are ephemeral: once a session ends, everything the agent learned — the tool calls it made, the errors it recovered from, the decisions it settled on — is gone. agentmemory fixes that with cross-session, cross-harness persistence (it already serves Claude Code, OpenCode, Hermes and more). This plugin is the dsh side of that ecosystem: it **writes** every session's activity into the daemon as observations, **reads** memory back into the model at the right moments, and exposes explicit **memory tools** the agent can call.
 
@@ -32,8 +32,6 @@ Start the agentmemory daemon first — the plugin's load gate requires it. The d
 
 > - Older 0.9.x drops `agentId` on `/agentmemory/remember`, so agent-scoped recall filters out every saved memory.
 > - Older 0.9.x observe dedup collapses rows that carry no `tool_input` (this plugin's approval → notification rows) onto one shared key per 5-minute window, silently dropping the second approval.
->
-> Both are fixed in 0.9.29.
 
 Then install the package from GitHub into a profile:
 
@@ -54,7 +52,7 @@ Mount the row from [`cordis-row.example.yml`](cordis-row.example.yml) into a hos
         enabled: true
 ```
 
-> Requires Node >= 20, a `shell` capability seam (the standard bash/pwsh executors), and a dsh harness matching the `peerDependencies` ranges in [package.json](package.json) (verified release waves: dsh-tools 0.1.1-rc.2 and 0.1.2-rc.1). Every key the row accepts is listed under [Configuration keys](#configuration-keys). Validation commands: see [Verification](#verification).
+> Requires Node >= 20, a `shell` capability seam (the standard bash/pwsh executors), and a dsh harness matching the `peerDependencies` ranges in [package.json](package.json) (verified against dsh-tools 0.1.1-rc.2 and 0.1.2-rc.1). Every key the row accepts is listed under [Configuration keys](#configuration-keys). Validation commands: see [Verification](#verification).
 
 ## DSH event → agentmemory mapping registry
 
@@ -69,7 +67,7 @@ This table is the authoritative registry of what the bridge sends to the daemon.
 | `tool/result` (ok) | `observe` | `post_tool_use` | `tool_name`/`tool_input`/`tool_output` from the `callMeta` stash (`tool_name` falls back to the event's `name`; `tool_input` falls back to `'result#'+callId`), plus `callId`, raw `content`, `isError: false`, `errorName: ''` | `tool_input=args` |
 | `tool/result` (err) | `observe` | `post_tool_failure` | same, with `isError: true` and `errorName` set | `tool_input=args` |
 | `turn/end` | `observe` | `post_tool_use` | `tool_name='turn_end'`, `tool_output=reason` (e.g. `completed`) | `tool_input='turn#'+seq` (unique) |
-| `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`, `request_id`, `call_id`, `reason` | no `tool_input`: on daemon ≥ 0.9.29 the dedup hash covers the whole `data`, whose unique request id keeps distinct prompts apart |
+| `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`, `request_id`, `call_id`, `reason` | no `tool_input`: the dedup hash covers the whole `data`, whose unique request id keeps distinct prompts apart |
 | `compaction/start` | `POST /agentmemory/context` refresh + re-inject flag (when `injectContext` + `injectContextOnCompaction`) | — | — | — |
 | `compaction/summary` | `POST /agentmemory/remember` (when `compactionBridge`) | — | `content='[dsh compaction] '+summary`, `type='fact'`, `concepts=['compaction']`, `project`, `agentId` | — |
 | `session/flush` | flush the buffered observations | — | — | — |
@@ -95,7 +93,7 @@ The distilled summary is free, daemon-adjacent memory — persisting it as a dur
 
 ### Dedup-safe design
 
-agentmemory's `mem::observe` drops duplicates by `sha256(sessionId, tool_name||hookType, tool_input[0..500])` with a 5-minute TTL; a hit discards the observation entirely. The bridge uses a per-session monotonic `seq` and natural content/`callId` as the `tool_input` discriminator, so multiple rows of the same kind all persist while identical prompts / identical `(tool, args)` results still merge naturally. When `tool_input` is absent the daemon (≥ 0.9.29) hashes the whole `data` object instead; on older 0.9.x such rows collapsed onto a single shared key, so a second approval within the window was silently dropped.
+agentmemory's `mem::observe` drops duplicates by `sha256(sessionId, tool_name||hookType, tool_input[0..500])` with a 5-minute TTL; a hit discards the observation entirely. The bridge uses a per-session monotonic `seq` and natural content/`callId` as the `tool_input` discriminator, so multiple rows of the same kind all persist while identical prompts / identical `(tool, args)` results still merge naturally. When `tool_input` is absent the daemon hashes the whole `data` object instead.
 
 ## Memory injection (read side)
 
