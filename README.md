@@ -20,13 +20,15 @@ All configuration comes from the plugin's row in `cordis.yml` — editing the `c
 
 ## Install (static composition)
 
-Start the agentmemory daemon first (default `http://localhost:3111`) — the plugin's load gate requires it. Verified against agentmemory 0.9.29; ≥ 0.9.29 recommended — older 0.9.x drops `agentId` on `/agentmemory/remember` and its dedup window can swallow distinct prompts (both fixed in 0.9.29). Then install the package from GitHub into a profile:
+Start the agentmemory daemon first (default `http://localhost:3111`) — the plugin's load gate requires it. Verified against agentmemory 0.9.29; ≥ 0.9.29 recommended — older 0.9.x drops `agentId` on `/agentmemory/remember`, and its observe dedup collapses rows that carry no `tool_input` (this plugin's approval → notification rows) onto one shared key per 5-minute window (both fixed in 0.9.29). Then install the package from GitHub into a profile:
 
 ```bash
 dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 ```
 
 (A local dev checkout also works via `dsh plugin --profile web add /path/to/checkout`.)
+
+> **Heads-up: agentmemory's own `connect dsh`.** agentmemory 0.9.29 ships an upstream connector (`agentmemory connect dsh`: an `@deepseek-ai/dsh-mcp-client` row, plus Claude Code hook scripts through the `dsh-hooks-claude-code` bridge with `--with-hooks`). It overlaps this plugin — both capture session activity and expose memory tools — and the daemon's dedup only merges identical rows under the same session id, so running both captures twice with partial duplicates. Pick one per profile: this plugin (standard-hookType mapping, `agent/pre-step` injection, native `memory_recall` / `memory_remember`) or the upstream connector.
 
 Mount the row from [`cordis-row.example.yml`](cordis-row.example.yml) into a host composition `cordis.yml` (or into a per-session agent preset's composition under `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`). The minimal row is just `{name}` — Cordis validates it against the plugin's `Config` schema and fills defaults (quote the name if it is a scoped package, i.e. starts with `@`, which YAML treats as a reserved scalar):
 
@@ -39,7 +41,7 @@ Mount the row from [`cordis-row.example.yml`](cordis-row.example.yml) into a hos
         enabled: true
 ```
 
-> Requires Node >= 20 and a `shell` capability seam (the standard bash/pwsh executors). Validation commands: see [Verification](#verification).
+> Requires Node >= 20, a `shell` capability seam (the standard bash/pwsh executors), and a dsh harness matching the `peerDependencies` ranges in [package.json](package.json) (verified waves: dsh-tools 0.1.1-rc.2 and 0.1.2-rc.1). Validation commands: see [Verification](#verification).
 
 ## DSH event → agentmemory mapping registry
 
@@ -54,7 +56,7 @@ This table is the authoritative registry of what the bridge sends to the daemon.
 | `tool/result` (ok) | `observe` | `post_tool_use` | `tool_name`/`tool_input`/`tool_output` from the `callMeta` stash (falls back to event fields), plus `callId` and raw `content` | `tool_input=args` |
 | `tool/result` (err) | `observe` | `post_tool_failure` | same, plus `isError: true` and `errorName` | `tool_input=args` |
 | `turn/end` | `observe` | `post_tool_use` | `tool_name='turn_end'`, `tool_output=reason` (e.g. `completed`) | `tool_input='turn#'+seq` (unique) |
-| `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`, `request_id`, `call_id`, `reason` | no `tool_input`: the dedup hash covers the whole `data`, whose unique request id keeps distinct prompts apart |
+| `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`, `request_id`, `call_id`, `reason` | no `tool_input`: on daemon ≥ 0.9.29 the dedup hash covers the whole `data`, whose unique request id keeps distinct prompts apart |
 | `compaction/start` | `POST /agentmemory/context` refresh + re-inject flag (when `injectContext` + `injectContextOnCompaction`) | — | — | — |
 | `compaction/summary` | `POST /agentmemory/remember` (when `compactionBridge`) | — | `content='[dsh compaction] '+summary`, `type='fact'`, `concepts=['compaction']` | — |
 | `session/flush` | flush the buffered observations | — | — | — |
@@ -80,7 +82,7 @@ The distilled summary is free, daemon-adjacent memory — persisting it as a dur
 
 ### Dedup-safe design
 
-agentmemory's `mem::observe` drops duplicates by `sha256(sessionId, tool_name||hookType, tool_input[0..500])` with a 5-minute TTL; a hit discards the observation entirely. The bridge uses a per-session monotonic `seq` and natural content/`callId` as the `tool_input` discriminator, so multiple rows of the same kind all persist while identical prompts / identical `(tool, args)` results still merge naturally.
+agentmemory's `mem::observe` drops duplicates by `sha256(sessionId, tool_name||hookType, tool_input[0..500])` with a 5-minute TTL; a hit discards the observation entirely. The bridge uses a per-session monotonic `seq` and natural content/`callId` as the `tool_input` discriminator, so multiple rows of the same kind all persist while identical prompts / identical `(tool, args)` results still merge naturally. When `tool_input` is absent the daemon (≥ 0.9.29) hashes the whole `data` object instead; on older 0.9.x such rows collapsed onto a single shared key, so a second approval within the window was silently dropped.
 
 ## Memory injection (read side)
 

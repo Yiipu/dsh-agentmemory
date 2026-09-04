@@ -20,13 +20,15 @@ dsh 会话是短暂的：会话一结束，agent 学到的一切——做过的�
 
 ## 安装（静态组合）
 
-先把 agentmemory daemon 跑起来（默认 `http://localhost:3111`）——插件的加载硬门要求它在线。已在 agentmemory 0.9.29 上验证；建议 ≥ 0.9.29 —— 更早的 0.9.x 会在 `/agentmemory/remember` 上丢弃 `agentId`，且其去重窗口可能吞掉不同的 prompt（两者均在 0.9.29 修复）。然后从 GitHub 把包装进 profile：
+先把 agentmemory daemon 跑起来（默认 `http://localhost:3111`）——插件的加载硬门要求它在线。已在 agentmemory 0.9.29 上验证；建议 ≥ 0.9.29 —— 更早的 0.9.x 会在 `/agentmemory/remember` 上丢弃 `agentId`，且其 observe 去重会把不带 `tool_input` 的行（本插件的 approval → notification 行）折叠到同一把 key、5 分钟窗口内静默丢弃（两者均在 0.9.29 修复）。然后从 GitHub 把包装进 profile：
 
 ```bash
 dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 ```
 
 （本地 dev 检出也可用：`dsh plugin --profile web add /path/to/checkout`。）
+
+> **注意：agentmemory 官方的 `connect dsh`。** agentmemory 0.9.29 自带上游连接器（`agentmemory connect dsh`：写入一行 `@deepseek-ai/dsh-mcp-client`，`--with-hooks` 再经 `dsh-hooks-claude-code` 桥接 Claude Code hook 脚本），与本插件功能重叠——都会捕获会话活动并暴露记忆工具；而 daemon 去重只合并同 session id 下的相同行，两者同时开等于双份捕获、部分重复。每个 profile 二选一：本插件（标准 hookType 映射、`agent/pre-step` 注入、原生 `memory_recall` / `memory_remember`）或上游连接器。
 
 把 [`cordis-row.example.yml`](cordis-row.example.yml) 里的行挂进 host 组合 `cordis.yml`（或 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 下的每会话 preset 组合）。最小行就是 `{name}`——Cordis 按插件的 `Config` schema 校验并填默认值（scoped 包名以 `@` 开头时需加引号，因为 `@` 是 YAML 保留标量起始）：
 
@@ -39,7 +41,7 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
         enabled: true
 ```
 
-> 需要 Node >= 20 和一个 `shell` 能力接缝（capability seam，标准 bash/pwsh 执行器）。校验命令见[验证](#验证)。
+> 需要 Node >= 20、一个 `shell` 能力接缝（capability seam，标准 bash/pwsh 执行器），以及与 [package.json](package.json) 中 `peerDependencies` 范围匹配的 dsh harness（已验证 wave：dsh-tools 0.1.1-rc.2 与 0.1.2-rc.1）。校验命令见[验证](#验证)。
 
 ## DSH 事件 → agentmemory 映射注册表
 
@@ -54,7 +56,7 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 | `tool/result`（ok） | `observe` | `post_tool_use` | 来自 `callMeta` stash 的 `tool_name`/`tool_input`/`tool_output`（事件字段兜底），另含 `callId` 与原始 `content` | `tool_input=args` |
 | `tool/result`（err） | `observe` | `post_tool_failure` | 同上，另加 `isError: true` 与 `errorName` | `tool_input=args` |
 | `turn/end` | `observe` | `post_tool_use` | `tool_name='turn_end'`、`tool_output=reason`（如 `completed`） | `tool_input='turn#'+seq`（唯一） |
-| `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`、`request_id`、`call_id`、`reason` | 无 `tool_input`：dedup 哈希覆盖整个 `data`，其中唯一的 request id 区分不同审批 |
+| `approval/asked` | `observe` | `notification` | `notification_type='permission_prompt'` + `tool_name`、`request_id`、`call_id`、`reason` | 无 `tool_input`：daemon ≥ 0.9.29 时 dedup 哈希覆盖整个 `data`，其中唯一的 request id 区分不同审批 |
 | `compaction/start` | `POST /agentmemory/context` 刷新 + 补注入标记（`injectContext` + `injectContextOnCompaction` 开启时） | — | — | — |
 | `compaction/summary` | `POST /agentmemory/remember`（`compactionBridge` 开启时） | — | `content='[dsh compaction] '+summary`、`type='fact'`、`concepts=['compaction']` | — |
 | `session/flush` | 缓冲观察落库 | — | — | — |
@@ -80,7 +82,7 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 
 ### Dedup-safe 设计
 
-agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_input[0..500])` 做 5 分钟 TTL 去重，命中即整条丢弃。桥接用每会话单调 `seq` 与自然内容/`callId` 做 `tool_input` 判别，保证同类多条都落库，同时保留「相同 prompt / 相同 (tool,args) 结果」的自然合并。
+agentmemory 的 `mem::observe` 对 `sha256(sessionId, tool_name||hookType, tool_input[0..500])` 做 5 分钟 TTL 去重，命中即整条丢弃。桥接用每会话单调 `seq` 与自然内容/`callId` 做 `tool_input` 判别，保证同类多条都落库，同时保留「相同 prompt / 相同 (tool,args) 结果」的自然合并。`tool_input` 缺失时 daemon（≥ 0.9.29）改为哈希整个 `data` 对象；更早的 0.9.x 会把这类行折叠到单一共享 key，窗口内的第二次审批会被静默丢弃。
 
 ## 记忆注入（读侧）
 
