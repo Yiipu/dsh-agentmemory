@@ -4,6 +4,14 @@
 
 English | [中文](README.zh.md)
 
+> **⚠️ Deprecated — final update.** This plugin is no longer maintained, and the repository will be marked deprecated. agentmemory 0.9.29+ ships an official dsh connector that supersedes it — migrate with:
+>
+> ```bash
+> agentmemory connect dsh --with-hooks
+> ```
+>
+> The official connector covers auto-capture (hooks bridged through the first-party `dsh-hooks-claude-code`) and the MCP memory tools; this plugin's `agent/pre-step` context injection has no official equivalent yet. Already-written memories and observations stay in the daemon (keyed by project/agentId) and remain queryable after migration — though the project/agentId the official connector stamps may differ from this plugin's (git-toplevel project, `dsh` agentId). While transitioning, pick one per profile: the daemon's dedup cannot merge the two capture streams, so running both duplicates rows.
+
 dsh sessions are ephemeral: once a session ends, everything the agent learned — the tool calls it made, the errors it recovered from, the decisions it settled on — is gone. agentmemory fixes that with cross-session, cross-harness persistence (it already serves Claude Code, OpenCode, Hermes and more). This plugin is the dsh side of that ecosystem: it **writes** every session's activity into the daemon as observations, **reads** memory back into the model at the right moments, and exposes explicit **memory tools** the agent can call.
 
 Three surfaces, one plugin:
@@ -34,12 +42,6 @@ dsh plugin --profile web add github:Yiipu/dsh-agentmemory
 ```
 
 (A local dev checkout also works via `dsh plugin --profile web add /path/to/checkout`.)
-
-> **Heads-up: agentmemory's own `connect dsh`.** agentmemory 0.9.29 ships an upstream dsh connector, and it overlaps this plugin:
->
-> - **What it is:** `agentmemory connect dsh` appends an `@deepseek-ai/dsh-mcp-client` row to the home-level `cordis.patch.yml`; `--with-hooks` additionally runs the bundled Claude Code hook scripts through the `dsh-hooks-claude-code` bridge.
-> - **Why they conflict:** both capture session activity and expose memory tools, and the daemon's dedup only merges identical rows under the same session id — running both means double capture with partial duplicates.
-> - **Pick one per profile:** this plugin (standard-hookType mapping, `agent/pre-step` injection, native `memory_recall` / `memory_remember`) or the upstream connector.
 
 Mount the row from [`cordis-row.example.yml`](cordis-row.example.yml) into a host composition `cordis.yml` (or into a per-session agent preset's composition under `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`). The minimal row is just `{name}` — Cordis validates it against the plugin's `Config` schema and fills defaults (quote the name if it is a scoped package, i.e. starts with `@`, which YAML treats as a reserved scalar):
 
