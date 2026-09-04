@@ -20,7 +20,7 @@ dsh 会话是短暂的：会话一结束，agent 学到的一切——做过的�
 
 ## 安装（静态组合）
 
-先把 agentmemory daemon 跑起来（默认 `http://localhost:3111`）——插件的加载硬门要求它在线。然后从 GitHub 把包装进 profile：
+先把 agentmemory daemon 跑起来（默认 `http://localhost:3111`）——插件的加载硬门要求它在线。已在 agentmemory 0.9.29 上验证；建议 ≥ 0.9.29 —— 更早的 0.9.x 会在 `/agentmemory/remember` 上丢弃 `agentId`，且其去重窗口可能吞掉不同的 prompt（两者均在 0.9.29 修复）。然后从 GitHub 把包装进 profile：
 
 ```bash
 dsh plugin --profile web add github:Yiipu/dsh-agentmemory

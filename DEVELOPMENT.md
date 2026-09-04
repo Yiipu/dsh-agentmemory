@@ -12,6 +12,8 @@ Local-development notes for the dsh-agentmemory bridge. End-user documentation l
 
 The plugin imports `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-tools`. They are declared as `peerDependencies` but not installed by this repo — the dsh harness resolves them at runtime. To run boot-check / smoke with plain Node from a checkout without installing the whole harness, link the harness's built-in packages in:
 
+Peer ranges are split by upstream versioning style. `cordis` / `schemastery` release stable semver, so a plain caret suffices (`^4.0.1` / `^3.18.1`). The dsh harness ships lockstep rc waves (all `@deepseek-ai/*` in sync; 0.1.1-rc.2 = dist-tag `latest`, 0.1.2-rc.1 = `next`), and strict semver never matches a prerelease against a range unless some comparator shares its [major, minor, patch] tuple — so the `dsh-tools` range floors at the oldest verified wave and ORs in each newer verified wave: `^0.1.1-rc.2 || ^0.1.2-rc.1`. A bare `*` matches no prerelease at all under strict semver and would pin nothing above 0.x, which is why it is not used. Maintenance rule: when a new lockstep wave lands (e.g. 0.1.3-rc.1), verify the plugin's surfaces against it (boot-check + smoke) and append `|| ^0.1.3-rc.1`; drop old clauses once no shipped harness uses them.
+
 ```bash
 mkdir -p node_modules
 ln -s <harness>/node_modules/@deepseek-ai node_modules/@deepseek-ai

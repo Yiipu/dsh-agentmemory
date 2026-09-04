@@ -20,7 +20,7 @@ All configuration comes from the plugin's row in `cordis.yml` — editing the `c
 
 ## Install (static composition)
 
-Start the agentmemory daemon first (default `http://localhost:3111`) — the plugin's load gate requires it. Then install the package from GitHub into a profile:
+Start the agentmemory daemon first (default `http://localhost:3111`) — the plugin's load gate requires it. Verified against agentmemory 0.9.29; ≥ 0.9.29 recommended — older 0.9.x drops `agentId` on `/agentmemory/remember` and its dedup window can swallow distinct prompts (both fixed in 0.9.29). Then install the package from GitHub into a profile:
 
 ```bash
 dsh plugin --profile web add github:Yiipu/dsh-agentmemory
